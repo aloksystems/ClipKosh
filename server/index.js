@@ -33,12 +33,16 @@ const USER_AGENT =
 const YTDLP = process.env.YTDLP_PATH || "yt-dlp";
 
 const os = require("os");
-// Puppeteer's default cache dir (used both at build and runtime). Render's
-// manual Web Service installs Chrome with `npx puppeteer browsers install
-// chrome` (no env var), so it lands here; keep runtime aligned with that.
-const PUPPETEER_CACHE_DIR = path.join(os.homedir(), ".cache", "puppeteer");
+// Puppeteer must find the Chrome installed during build. Render's build
+// installs Chrome into the in-app cache (via render-build.sh) so it survives
+// into the runtime image; keep runtime pointed at that same place.
 if (!process.env.PUPPETEER_CACHE_DIR) {
-  process.env.PUPPETEER_CACHE_DIR = PUPPETEER_CACHE_DIR;
+  process.env.PUPPETEER_CACHE_DIR = path.join(
+    __dirname,
+    "..",
+    ".cache",
+    "puppeteer"
+  );
 }
 
 /** Is the yt-dlp binary usable on this server? */
@@ -482,6 +486,11 @@ app.get("/api/diag", async (req, res) => {
     chromeFiles: [],
     found: [],
   };
+  out.ffmpeg = await new Promise((resolve) => {
+    execFile("ffmpeg", ["-version"], { timeout: 10000 }, (err, stdout) =>
+      resolve(!err && /ffmpeg version/.test(String(stdout || "")))
+    );
+  });
   out.found = await new Promise((resolve) => {
     execFile(
       "find",
