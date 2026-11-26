@@ -8,8 +8,11 @@ echo "==> npm install"
 npm install
 
 echo "==> Puppeteer Chrome (Instagram/Facebook extraction)"
-export PUPPETEER_CACHE_DIR="/opt/render/project/.cache/puppeteer"
-mkdir -p "$PUPPETEER_CACHE_DIR"
+# Keep the browser cache inside the repo (../ relative to the server/ root) so
+# it survives into runtime and matches what the app computes at startup.
+CACHE_DIR="$(cd .. && pwd)/.cache/puppeteer"
+export PUPPETEER_CACHE_DIR="$CACHE_DIR"
+mkdir -p "$CACHE_DIR"
 npx puppeteer browsers install chrome
 
 echo "==> System deps: ffmpeg + Chromium shared libraries"

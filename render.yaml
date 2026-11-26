@@ -15,7 +15,3 @@ services:
       # If left unset, the server derives it from each request's host.
       - key: BASE_URL
         sync: false
-      # Puppeteer must find Chrome installed during build; point it at the
-      # project-persistent cache so it survives into the runtime container.
-      - key: PUPPETEER_CACHE_DIR
-        value: /opt/render/project/.cache/puppeteer
