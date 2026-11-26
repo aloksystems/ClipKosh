@@ -32,7 +32,6 @@ const USER_AGENT =
 
 const YTDLP = process.env.YTDLP_PATH || "yt-dlp";
 
-const os = require("os");
 // Puppeteer must find the Chrome installed during build. Render's build
 // installs Chrome into the in-app cache (via render-build.sh) so it survives
 // into the runtime image; keep runtime pointed at that same place.
@@ -474,53 +473,6 @@ app.post("/api/resolve", async (req, res) => {
 // API is reachable vs. hitting a static file server.
 app.get("/api/health", (req, res) => {
   res.json({ ok: true, service: "clipkosh" });
-});
-
-// TEMP diagnostic — reports whether Puppeteer can launch Chrome on this host.
-app.get("/api/diag", async (req, res) => {
-  const out = {
-    gitCommit: process.env.RENDER_GIT_COMMIT || null,
-    ytdlp: await hasYtDlp(),
-    home: process.env.HOME || os.homedir(),
-    cacheDir: process.env.PUPPETEER_CACHE_DIR,
-    chromeFiles: [],
-    found: [],
-  };
-  out.ffmpeg = await new Promise((resolve) => {
-    execFile("ffmpeg", ["-version"], { timeout: 10000 }, (err, stdout) =>
-      resolve(!err && /ffmpeg version/.test(String(stdout || "")))
-    );
-  });
-  out.found = await new Promise((resolve) => {
-    execFile(
-      "find",
-      ["/", "-type", "f", "-name", "chrome", "-path", "*puppeteer*"],
-      { timeout: 30000 },
-      (err, stdout) => resolve(String(stdout || "").trim().split("\n").filter(Boolean))
-    );
-  });
-  try {
-    const cacheRoot = process.env.PUPPETEER_CACHE_DIR;
-    if (cacheRoot && fs.existsSync(cacheRoot)) {
-      const walk = (dir, acc, depth) => {
-        if (depth > 4 || !fs.existsSync(dir)) return acc;
-        for (const name of fs.readdirSync(dir)) {
-          const p = path.join(dir, name);
-          if (name === "chrome" && fs.statSync(p).isFile()) acc.push(p);
-          else if (fs.statSync(p).isDirectory()) walk(p, acc, depth + 1);
-        }
-        return acc;
-      };
-      out.chromeFiles = walk(cacheRoot, [], 0);
-    }
-    const browser = await getBrowser();
-    out.browserLaunch = "ok";
-    await browser.close().catch(() => {});
-    browserPromise = null;
-  } catch (e) {
-    out.browserLaunch = "failed: " + (e.message || e);
-  }
-  res.json(out);
 });
 
 app.get("/api/download", async (req, res) => {
