@@ -480,7 +480,16 @@ app.get("/api/diag", async (req, res) => {
     home: process.env.HOME || os.homedir(),
     cacheDir: process.env.PUPPETEER_CACHE_DIR,
     chromeFiles: [],
+    found: [],
   };
+  out.found = await new Promise((resolve) => {
+    execFile(
+      "find",
+      ["/", "-type", "f", "-name", "chrome", "-path", "*puppeteer*"],
+      { timeout: 30000 },
+      (err, stdout) => resolve(String(stdout || "").trim().split("\n").filter(Boolean))
+    );
+  });
   try {
     const cacheRoot = process.env.PUPPETEER_CACHE_DIR;
     if (cacheRoot && fs.existsSync(cacheRoot)) {
