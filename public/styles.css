@@ -153,6 +153,8 @@ input { font-family: inherit; }
 }
 .result-title { font-size: 18px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .result-meta { color: var(--muted); font-size: 14px; }
+.result-actions [hidden] { display: none !important; }
+
 .result-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 6px; }
 .result-actions .btn { height: 44px; }
 .btn-ghost { background: rgba(255,255,255,0.05); border: 1px solid var(--line); color: var(--text); padding: 0 18px; }

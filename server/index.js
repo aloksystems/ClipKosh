@@ -18,7 +18,7 @@
 
 const express = require("express");
 const path = require("path");
-const { execFile } = require("child_process");
+const { execFile, spawn } = require("child_process");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -28,6 +28,17 @@ const publicDir = path.join(__dirname, "..", "public");
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
   "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/158.0.0.0 Safari/537.36";
+
+const YTDLP = process.env.YTDLP_PATH || "yt-dlp";
+
+/** Is the yt-dlp binary usable on this server? */
+function hasYtDlp() {
+  return new Promise((resolve) => {
+    execFile(YTDLP, ["--version"], { timeout: 15000 }, (err, stdout) => {
+      resolve(!err && /^20\d\d\./.test(String(stdout || "").trim()));
+    });
+  });
+}
 
 app.use(express.json());
 app.disable("x-powered-by");
@@ -123,7 +134,7 @@ function parseFacebookVideo(html) {
 function ytDlpUrl(videoUrl) {
   return new Promise((resolve) => {
     execFile(
-      "yt-dlp",
+      YTDLP,
       [
         "--no-warnings",
         "--skip-download",
@@ -135,6 +146,30 @@ function ytDlpUrl(videoUrl) {
       ],
       { timeout: 90000, maxBuffer: 2 * 1024 * 1024 },
       (err, stdout, stderr) => {
+        if (err) return resolve(null);
+        const line = String(stdout || "").trim().split("\n")[0];
+        resolve(/^https?:\/\//.test(line) ? line : null);
+      }
+    );
+  });
+}
+
+/** Resolve the best audio stream URL (m4a preferred) via yt-dlp. */
+function ytDlpAudioUrl(videoUrl) {
+  return new Promise((resolve) => {
+    execFile(
+      YTDLP,
+      [
+        "--no-warnings",
+        "--skip-download",
+        "--print",
+        "%(url)s",
+        "-f",
+        "bestaudio[ext=m4a]/bestaudio",
+        videoUrl,
+      ],
+      { timeout: 90000, maxBuffer: 2 * 1024 * 1024 },
+      (err, stdout) => {
         if (err) return resolve(null);
         const line = String(stdout || "").trim().split("\n")[0];
         resolve(/^https?:\/\//.test(line) ? line : null);
@@ -326,18 +361,34 @@ async function extractMedia(pageUrl, platform) {
   if (platform === "youtube") {
     const id = ytId(pageUrl);
     if (!id) return null;
-    const dl = await ytDlpUrl(pageUrl);
+
+    const present = await hasYtDlp();
+    if (!present) {
+      const missing = new Error(
+        "YouTube requires the 'yt-dlp' tool on the server (missing during build)."
+      );
+      missing.code = "YTDLP_MISSING";
+      throw missing;
+    }
+
+    const [dl, audio] = await Promise.all([
+      ytDlpUrl(pageUrl),
+      ytDlpAudioUrl(pageUrl),
+    ]);
     if (dl) {
       return {
         video: dl,
         thumb: "https://i.ytimg.com/vi/" + id + "/hqdefault.jpg",
+        audioUrl: audio || null,
       };
     }
-    const err = new Error(
-      "YouTube requires the 'yt-dlp' tool on the server. Install it: pip install yt-dlp"
+
+    // Tool exists but produced nothing — the video itself is unavailable.
+    const blocked = new Error(
+      "Couldn't extract this YouTube video (it may be private, age/region-restricted, or unavailable)."
     );
-    err.code = "YTDLP_MISSING";
-    throw err;
+    blocked.code = "YT_RESOLVE_FAILED";
+    throw blocked;
   }
   return null;
 }
@@ -381,6 +432,9 @@ app.post("/api/resolve", async (req, res) => {
       req.protocol;
     const base =
       process.env.BASE_URL || proto + "://" + req.get("host");
+    const audioDownloadUrl = media.audioUrl
+      ? base + "/api/download-audio?url=" + encodeURIComponent(media.audioUrl)
+      : null;
     res.json({
       platform,
       title: PLATFORM_TITLES[platform] || "Media",
@@ -388,10 +442,15 @@ app.post("/api/resolve", async (req, res) => {
       thumbnail: media.thumb,
       sizeBytes,
       downloadUrl: base + "/api/download?url=" + encodeURIComponent(media.video),
+      audioUrl: media.audioUrl || null,
+      audioDownloadUrl,
     });
   } catch (err) {
     if (err && err.code === "YTDLP_MISSING") {
       return res.status(501).json({ error: err.message });
+    }
+    if (err && err.code === "YT_RESOLVE_FAILED") {
+      return res.status(422).json({ error: err.message });
     }
     res.status(500).json({ error: err.message || "Server error." });
   }
@@ -460,6 +519,69 @@ app.get("/api/thumb", async (req, res) => {
     res.end();
   } catch (err) {
     res.status(502).end();
+  }
+});
+
+// Audio proxy: fetches the best audio stream and transcodes it to MP3 on the
+// fly with ffmpeg (y2mate-style audio download). Works from any device.
+app.get("/api/download-audio", async (req, res) => {
+  const mediaUrl = req.query.url;
+  if (!mediaUrl) return res.status(400).send("Missing url parameter.");
+
+  try {
+    const remote = await fetch(mediaUrl, {
+      headers: {
+        "User-Agent": USER_AGENT,
+        Referer: "https://www.youtube.com/",
+      },
+    });
+    if (!remote.ok) return res.status(remote.status).send("Could not fetch audio stream.");
+
+    const ff = spawn("ffmpeg", [
+      "-hide_banner",
+      "-loglevel",
+      "error",
+      "-i",
+      "pipe:0",
+      "-vn",
+      "-ac",
+      "2",
+      "-b:a",
+      "192k",
+      "-f",
+      "mp3",
+      "pipe:1",
+    ]);
+
+    let headed = false;
+    ff.once("error", (err) => {
+      if (headed) return;
+      headed = true;
+      if (err && err.code === "ENOENT") {
+        res.status(501).send("ffmpeg is not installed on the server (audio conversion unavailable).");
+      } else {
+        try { res.destroy(); } catch (e) { /* ignore */ }
+      }
+    });
+
+    res.status(200);
+    res.setHeader("Content-Type", "audio/mpeg");
+    res.setHeader("Content-Disposition", 'attachment; filename="clipkosh-audio.mp3"');
+    ff.stdout.pipe(res);
+
+    (async () => {
+      for await (const chunk of remote.body) {
+        ff.stdin.write(chunk);
+      }
+      ff.stdin.end();
+    })().catch(() => { try { ff.kill(); } catch (e) { /* ignore */ } });
+
+    remote.body.on("error", () => { try { ff.kill(); } catch (e) { /* ignore */ } });
+    ff.on("close", () => {
+      try { if (!res.writableEnded) res.end(); } catch (e) { /* ignore */ }
+    });
+  } catch (err) {
+    res.status(500).send("Audio download failed: " + (err.message || ""));
   }
 });
 

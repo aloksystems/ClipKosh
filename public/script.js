@@ -12,6 +12,7 @@
   var titleEl = document.getElementById("result-title");
   var metaEl = document.getElementById("result-meta");
   var dlLink = document.getElementById("dl-link");
+  var audioLink = document.getElementById("dl-audio");
   var copyBtn = document.getElementById("copy-link");
   var clearBtn = document.getElementById("clear-result");
   var sampleBtn = document.getElementById("sample-link");
@@ -96,6 +97,14 @@
     dlLink.href = currentDownloadUrl;
     preview.src = currentDownloadUrl;
 
+    if (data.audioDownloadUrl) {
+      audioLink.href = data.audioDownloadUrl;
+      audioLink.hidden = false;
+    } else {
+      audioLink.removeAttribute("href");
+      audioLink.hidden = true;
+    }
+
     resultSection.hidden = false;
     resultSection.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }
@@ -104,6 +113,8 @@
     resultSection.hidden = true;
     currentDownloadUrl = "";
     dlLink.removeAttribute("href");
+    audioLink.removeAttribute("href");
+    audioLink.hidden = true;
     preview.pause();
     preview.removeAttribute("src");
     preview.load();

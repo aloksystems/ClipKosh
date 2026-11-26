@@ -26,7 +26,7 @@ Browsers cannot fetch these media files directly (CORS + platform protections), 
 Media extraction per platform:
 - **Instagram** — headless Chromium render (Puppeteer) → static `og:video` / `video_versions` scrape → optional external resolver.
 - **Facebook** — static `og:video` / JSON `playable_url` scrape, with a browser-render fallback.
-- **YouTube** — the [yt-dlp](https://github.com/yt-dlp/yt-dlp) tool fetches the best mp4 stream (≤1080p). The server must have `yt-dlp` installed (see below).
+- **YouTube** — the [yt-dlp](https://github.com/yt-dlp/yt-dlp) tool fetches the best mp4 stream (≤1080p). The server must have `yt-dlp` installed (see below). YouTube results also include an **MP3 audio** download (transcoded on the fly with ffmpeg).
 
 ## Run
 
