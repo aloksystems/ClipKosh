@@ -8,6 +8,8 @@ echo "==> npm install"
 npm install
 
 echo "==> Puppeteer Chrome (Instagram/Facebook extraction)"
+export PUPPETEER_CACHE_DIR="/opt/render/project/.cache/puppeteer"
+mkdir -p "$PUPPETEER_CACHE_DIR"
 npx puppeteer browsers install chrome
 
 echo "==> System deps: ffmpeg + Chromium shared libraries"
