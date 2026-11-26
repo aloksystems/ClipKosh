@@ -32,15 +32,13 @@ const USER_AGENT =
 
 const YTDLP = process.env.YTDLP_PATH || "yt-dlp";
 
-// Puppeteer must find the Chrome installed during build. The build places it
-// in <project>/.cache/puppeteer; point Puppeteer there if not already set.
+const os = require("os");
+// Puppeteer's default cache dir (used both at build and runtime). Render's
+// manual Web Service installs Chrome with `npx puppeteer browsers install
+// chrome` (no env var), so it lands here; keep runtime aligned with that.
+const PUPPETEER_CACHE_DIR = path.join(os.homedir(), ".cache", "puppeteer");
 if (!process.env.PUPPETEER_CACHE_DIR) {
-  process.env.PUPPETEER_CACHE_DIR = path.join(
-    __dirname,
-    "..",
-    ".cache",
-    "puppeteer"
-  );
+  process.env.PUPPETEER_CACHE_DIR = PUPPETEER_CACHE_DIR;
 }
 
 /** Is the yt-dlp binary usable on this server? */
@@ -479,6 +477,7 @@ app.get("/api/diag", async (req, res) => {
   const out = {
     gitCommit: process.env.RENDER_GIT_COMMIT || null,
     ytdlp: await hasYtDlp(),
+    home: process.env.HOME || os.homedir(),
     cacheDir: process.env.PUPPETEER_CACHE_DIR,
     chromeFiles: [],
   };
