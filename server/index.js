@@ -462,6 +462,20 @@ app.get("/api/health", (req, res) => {
   res.json({ ok: true, service: "clipkosh" });
 });
 
+// TEMP diagnostic — reports whether Puppeteer can launch Chrome on this host.
+app.get("/api/diag", async (req, res) => {
+  const out = { ytdlp: await hasYtDlp() };
+  try {
+    const browser = await getBrowser();
+    out.browserLaunch = "ok";
+    await browser.close().catch(() => {});
+    browserPromise = null;
+  } catch (e) {
+    out.browserLaunch = "failed: " + (e.message || e);
+  }
+  res.json(out);
+});
+
 app.get("/api/download", async (req, res) => {
   const mediaUrl = req.query.url;
   if (!mediaUrl) return res.status(400).send("Missing url parameter.");
