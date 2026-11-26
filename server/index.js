@@ -31,6 +31,17 @@ const USER_AGENT =
 
 const YTDLP = process.env.YTDLP_PATH || "yt-dlp";
 
+// Puppeteer must find the Chrome installed during build. The build places it
+// in <project>/.cache/puppeteer; point Puppeteer there if not already set.
+if (!process.env.PUPPETEER_CACHE_DIR) {
+  process.env.PUPPETEER_CACHE_DIR = path.join(
+    __dirname,
+    "..",
+    ".cache",
+    "puppeteer"
+  );
+}
+
 /** Is the yt-dlp binary usable on this server? */
 function hasYtDlp() {
   return new Promise((resolve) => {
