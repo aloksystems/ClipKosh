@@ -1,0 +1,86 @@
+# ClipKosh 📸
+
+A minimal, premium-looking downloader for **Instagram**, **Facebook** and **YouTube** videos. Dark aurora theme, glassmorphism UI, and a lightweight Node/Express backend proxy. Paste a share link, get a clean HD copy.
+
+## Structure
+
+```
+.
+├── public/           # Frontend (served by Express — the only exposed folder)
+│   ├── index.html    #   markup
+│   ├── styles.css    #   premium aurora/glass design
+│   └── script.js     #   validation / loading / resolve logic
+└── server/           # Backend proxy (never exposed publicly)
+    ├── index.js      # Express server: static + resolve + download streaming
+    └── package.json
+```
+
+## How it works
+
+Browsers cannot fetch these media files directly (CORS + platform protections), so a small backend does it:
+
+1. **`POST /api/resolve`** — detects the platform (Instagram / Facebook / YouTube), extracts the direct video URL plus real file size (HEAD), and returns it as JSON (with a `downloadUrl`).
+2. **`GET /api/download?url=…`** — proxies/streams the video to the browser as an attachment. Supports HTTP **Range** requests, so the result card's inline `<video>` preview plays directly from the stream.
+3. **`GET /api/thumb?url=…`** — optional image proxy that fetches thumbnails with the right referer (CDNs block hotlinking from other origins).
+
+Media extraction per platform:
+- **Instagram** — headless Chromium render (Puppeteer) → static `og:video` / `video_versions` scrape → optional external resolver.
+- **Facebook** — static `og:video` / JSON `playable_url` scrape, with a browser-render fallback.
+- **YouTube** — the [yt-dlp](https://github.com/yt-dlp/yt-dlp) tool fetches the best mp4 stream (≤1080p). The server must have `yt-dlp` installed (see below).
+
+## Run
+
+```bash
+cd server
+npm install
+npm start
+```
+
+Then open **http://localhost:3000**.
+
+> **For YouTube support**, also install `yt-dlp` and make sure it's on the PATH:
+> `pip install yt-dlp` (or drop `yt-dlp.exe` somewhere on PATH on Windows).
+> Instagram and Facebook work without it.
+
+There is also a tiny **`GET /api/health`** endpoint (returns `{"ok":true}`). The frontend pings it on load and shows a small status badge in the footer — **API online / API offline** — so you can instantly tell whether the page you're viewing is talking to Express or to a static file server.
+
+Download links are generated automatically from the host the request arrives on (so LAN and deployed URLs work without config). If you need to override the base, set **`BASE_URL`** (e.g. `set BASE_URL=https://your-domain.com`).
+
+To plug in an external resolver API: `set RESOLVER_URL=https://your-resolver.example/api`.
+
+## Running it all the time + using it from your phone
+
+Two things are usually needed: (1) have the server keep running even when you're not babysitting a terminal, and (2) reach it from your phone. These are **separate** problems — pick what fits.
+
+### A. Keep the server running (no open terminal needed)
+
+- **Windows (best/easy):** install [PM2](https://pm2.keymetrics.io/) and run it as a service so it starts on boot:
+  ```bash
+  cd server
+  npm i -g pm2
+  pm2 start index.js --name clipkosh
+  pm2 save
+  pm2 startup   # follow its instructions to auto-start on boot
+  ```
+- **Windows (no extra tools):** create a `start.bat` and put a shortcut in `shell:startup`:
+  ```bat
+  @echo off
+  cd /d D:\Projects\Instagram-reel-downloader\server
+  node index.js
+  ```
+
+### B. Reach it from your phone
+
+- **Same Wi‑Fi (quick, free):** start the server, find your PC's LAN IP (`ipconfig` → IPv4, e.g. `192.168.1.5`), then on your phone open **`http://192.168.1.5:3000`**. No tunnel, no internet upload — just your home network.
+- **From anywhere (production):** deploy to a free host that runs the app 24/7 and gives a public HTTPS URL. The repo already includes **[`render.yaml`](./render.yaml)** — on **Render**, create a **Web Service → point it at this repo (or upload the folder)** and it picks up the config automatically (build installs Puppeteer's Chromium, start runs `npm start`, health check at `/api/health`). You get a URL like `https://your-app.onrender.com`. **[Railway](https://railway.app)** works similarly.
+  - Then open that URL on your phone — it works anywhere, even off your phone's Wi‑Fi.
+  - > **Vercel caveat:** Vercel is serverless and cannot run Puppeteer/Chromium, so this backend (especially Instagram/YouTube) won't fit there. Stick with Render/Railway for the full app. If you ever separate the frontend from the API, the `public/` folder alone could be hosted on Vercel pointing at a Render API.
+
+> The download links returned by the API use the current host automatically (or `BASE_URL` if set). If you deploy, always open the deployed URL (not `localhost`) so downloads work there too.
+
+## Notes
+
+- Only works for **public** content. Private/unavailable posts return a clean error.
+- Respect each platform's [Terms of Service](https://help.instagram.com/581066165581870) and creators' rights — only download media you own or have permission to save.
+- YouTube uses `yt-dlp`; be aware it's third-party tooling and subject to YouTube's terms.
+- The Telegram/other platforms are not supported — add them in `detectPlatform()` + a new extractor if you want them.

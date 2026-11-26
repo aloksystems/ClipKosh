@@ -1,0 +1,17 @@
+# ClipKosh — one-click deployment for Render (free tier).
+# Dashboard → New → Web Service → point it at this repo (or upload the folder).
+# Render detects this file and uses the settings below.
+services:
+  - type: web
+    name: clipkosh
+    runtime: node
+    plan: free
+    rootDir: server
+    buildCommand: npm install && npx puppeteer browsers install chrome && pip3 install -q yt-dlp
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      # Optional: override the public base URL used to build download links.
+      # If left unset, the server derives it from each request's host.
+      - key: BASE_URL
+        sync: false

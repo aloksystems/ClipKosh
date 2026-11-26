@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ClipKosh — Instagram, Facebook &amp; YouTube Video Downloader</title>
+  <meta name="description" content="Download Instagram reels, videos and photos free. No watermark, no login, unlimited, private &amp; secure." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="aurora" aria-hidden="true"><span class="blob b1"></span><span class="blob b2"></span><span class="blob b3"></span></div>
+  <div class="grain" aria-hidden="true"></div>
+
+  <!-- Nav -->
+  <header class="nav">
+    <a class="brand" href="#">
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="20" height="20"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M8 5l9 7-9 7V5z"/></svg>
+      </span>
+      ClipKosh
+    </a>
+    <nav class="nav-links">
+      <a href="#features">Features</a>
+      <a href="#how">How it works</a>
+      <a href="#faq">FAQ</a>
+    </nav>
+    <span class="nav-badge">v1.0</span>
+  </header>
+
+  <main>
+    <!-- Hero -->
+    <section class="hero">
+      <div class="eyebrow">Instagram Media Downloader</div>
+      <h1 class="title">Download <span class="grad">Reels</span>, Videos <br />&amp; Clips in seconds</h1>
+      <p class="subtitle">Paste any Instagram, Facebook or YouTube link. Get a clean HD copy instantly — free, no watermark, no sign-in.</p>
+
+      <!-- Paste link flow -->
+      <div class="card holder">
+        <form id="download-form" class="paste" autocomplete="off" novalidate>
+          <div class="paste-inner">
+            <span class="paste-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="22" height="22"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+            </span>
+            <input id="reel-url" type="url" class="paste-input" placeholder="Paste Instagram / Facebook / YouTube link…" spellcheck="false" />
+            <button type="submit" class="btn btn-primary paste-btn" id="download-btn">
+              <span class="btn-label">Download</span>
+              <span class="spinner" aria-hidden="true"></span>
+            </button>
+          </div>
+        </form>
+        <div class="paste-helper">
+          <span>Paste link</span><i aria-hidden="true">→</i><span>Hit Download</span>
+          <button type="button" class="sample" id="sample-link">Try a sample reel</button>
+        </div>
+        <div class="paste-error" id="paste-error" role="alert" hidden></div>
+      </div>
+
+      <ul class="chips">
+        <li>Free forever</li>
+        <li>No watermark</li>
+        <li>HD quality</li>
+        <li>No login</li>
+        <li>Unlimited</li>
+        <li>Private &amp; secure</li>
+      </ul>
+    </section>
+
+    <!-- Result -->
+    <section class="result-wrap" id="result" hidden>
+      <div class="card result">
+        <div class="result-media">
+          <video id="preview" class="preview" controls muted playsinline preload="metadata"></video>
+        </div>
+        <div class="result-info">
+          <span class="result-filetype">MP4 · Video</span>
+          <h3 class="result-title" id="result-title">Instagram media</h3>
+          <div class="result-meta" id="result-meta"></div>
+          <div class="result-actions">
+            <a class="btn btn-primary" id="dl-link" href="#" download>
+              <span class="btn-label">Save video</span>
+            </a>
+            <button type="button" class="btn btn-ghost" id="copy-link">Copy link</button>
+            <button type="button" class="btn btn-ghost" id="clear-result">New search</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Features -->
+    <section class="section" id="features">
+      <h2 class="section-title">Why people use <span class="grad">ClipKosh</span></h2>
+      <p class="section-sub">Built to be fast, private and dead simple.</p>
+      <div class="grid">
+        <article class="tile"><div class="tile-ico">⚡</div><h3>Lightning fast</h3><p>Media resolves in seconds via the shortest reliable path.</p></article>
+        <article class="tile"><div class="tile-ico">💧</div><h3>No watermark</h3><p>Download the original clean file, not a watermarked re-encode.</p></article>
+        <article class="tile"><div class="tile-ico">🎞️</div><h3>HD quality</h3><p>Keep the highest available source resolution, straight from the CDN.</p></article>
+        <article class="tile"><div class="tile-ico">🕶️</div><h3>No login</h3><p>No Instagram account or any account required. Tap. Download. Done.</p></article>
+        <article class="tile"><div class="tile-ico">♾️</div><h3>Unlimited</h3><p>Download as many reels and videos as you like, whenever.</p></article>
+        <article class="tile"><div class="tile-ico">🔒</div><h3>Private &amp; secure</h3><p>Links are processed anonymously. We never store your media.</p></article>
+      </div>
+    </section>
+
+    <!-- How it works -->
+    <section class="section" id="how">
+      <h2 class="section-title">How it <span class="grad">works</span></h2>
+      <div class="steps">
+        <div class="step"><span class="step-num">1</span><h3>Copy the link</h3><p>Open Instagram, Facebook or YouTube, pick the video you want, and copy its share link.</p></div>
+        <div class="step"><span class="step-num">2</span><h3>Paste it here</h3><p>Drop the link into the box above and press Download.</p></div>
+        <div class="step"><span class="step-num">3</span><h3>Save the file</h3><p>Your video appears. Tap Save video and it lands on your device.</p></div>
+      </div>
+    </section>
+
+    <!-- FAQ -->
+    <section class="section" id="faq">
+      <h2 class="section-title">Frequently asked <span class="grad">questions</span></h2>
+      <div class="faq">
+        <details class="faq-item"><summary>Is this free?<span class="chev">⌄</span></summary><p>Yes — completely free with no limits, no watermark and no registration.</p></details>
+        <details class="faq-item"><summary>Does it work for private accounts?<span class="chev">⌄</span></summary><p>No. We can only download public reels and videos. Private posts aren't accessible.</p></details>
+        <details class="faq-item"><summary>Which sites are supported?<span class="chev">⌄</span></summary><p>Instagram reels &amp; videos, Facebook videos/reels, and YouTube videos. Paste any share link and hit Download.</p></details>
+        <details class="faq-item"><summary>Is it safe to use?<span class="chev">⌄</span></summary><p>Your link is processed anonymously and never stored. We fetch the file fresh each time.</p></details>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <span>© <span id="year"></span> ClipKosh</span>
+    <span class="footer-note">For personal use. Respect creators' rights.</span>
+    <span class="api-status" id="api-status" title="API connection status">API…</span>
+  </footer>
+
+  <div class="toast" id="toast" role="status"></div>
+
+  <script src="script.js"></script>
+</body>
+</html>
