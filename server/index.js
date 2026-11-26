@@ -18,6 +18,7 @@
 
 const express = require("express");
 const path = require("path");
+const fs = require("fs");
 const { execFile, spawn } = require("child_process");
 
 const app = express();
@@ -475,8 +476,26 @@ app.get("/api/health", (req, res) => {
 
 // TEMP diagnostic — reports whether Puppeteer can launch Chrome on this host.
 app.get("/api/diag", async (req, res) => {
-  const out = { ytdlp: await hasYtDlp() };
+  const out = {
+    gitCommit: process.env.RENDER_GIT_COMMIT || null,
+    ytdlp: await hasYtDlp(),
+    cacheDir: process.env.PUPPETEER_CACHE_DIR,
+    chromeFiles: [],
+  };
   try {
+    const cacheRoot = process.env.PUPPETEER_CACHE_DIR;
+    if (cacheRoot && fs.existsSync(cacheRoot)) {
+      const walk = (dir, acc, depth) => {
+        if (depth > 4 || !fs.existsSync(dir)) return acc;
+        for (const name of fs.readdirSync(dir)) {
+          const p = path.join(dir, name);
+          if (name === "chrome" && fs.statSync(p).isFile()) acc.push(p);
+          else if (fs.statSync(p).isDirectory()) walk(p, acc, depth + 1);
+        }
+        return acc;
+      };
+      out.chromeFiles = walk(cacheRoot, [], 0);
+    }
     const browser = await getBrowser();
     out.browserLaunch = "ok";
     await browser.close().catch(() => {});
