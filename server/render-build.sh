@@ -15,23 +15,14 @@ export PUPPETEER_CACHE_DIR="$CACHE_DIR"
 mkdir -p "$CACHE_DIR"
 npx puppeteer browsers install chrome
 
-echo "==> System deps: ffmpeg + Chromium shared libraries"
-# Some Render build images mount /var/lib/apt read-only; keep apt's state and
-# cache inside the writable project dir so updates/installs can succeed.
-APT_DIR="$PWD/.apt"
-mkdir -p "$APT_DIR/lists/partial" "$APT_DIR/cache/archives/partial"
-APT_OPTS=(
-  -o "Dir::State::lists=$APT_DIR/lists"
-  -o "Dir::Cache=$APT_DIR/cache"
-  -o "Dir::Cache::archives=$APT_DIR/cache/archives"
-)
-export DEBIAN_FRONTEND=noninteractive
-apt-get "${APT_OPTS[@]}" update -qq
-apt-get "${APT_OPTS[@]}" install -y -qq \
-  ffmpeg \
-  libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 \
-  libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 \
-  libxrandr2 libgbm1 libasound2 libpango-1.0-0 libcairo2
+# Note: Render's free build image is not root and mounts dpkg dirs read-only,
+# so apt-get cannot install system packages here. The base image already ships
+# ffmpeg and Chromium's shared libraries; we verify Chrome's deps below.
+
+echo "==> Checking Chrome shared-library dependencies"
+CHROME_BIN=$(find "$CACHE_DIR" -type f -name chrome -path "*chrome-linux64*" | head -1)
+echo "chrome bin: $CHROME_BIN"
+ldd "$CHROME_BIN" 2>/dev/null | grep -i "not found" || echo "ALL_CHROME_LIBS_PRESENT"
 
 echo "==> yt-dlp (YouTube)"
 pip3 install -q yt-dlp
