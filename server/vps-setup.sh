@@ -12,14 +12,25 @@ echo "==> Updating package lists"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 
-echo "==> Installing system packages (ffmpeg, git, curl, python, build tools)"
+# Show what distro we are on (helps diagnose missing-package errors).
+echo "==> Distro: $(. /etc/os-release && echo "$ID $VERSION_ID")"
+
+echo "==> Installing core system packages (ffmpeg, git, curl, python, build tools)"
 apt-get install -y -qq \
   ffmpeg git curl ca-certificates \
   python3 python3-pip python3-venv \
-  build-essential pkg-config libnss3 libatk-bridge2.0-0 \
-  libx11-xcb1 libxcomposite1 libxcursor1 libxdamage1 libxrandr2 \
-  libgbm1 libasound2 libpangocairo-1.0-0 libgtk-3-0 \
+  build-essential pkg-config \
   >/dev/null
+
+# Chrome shared-library deps are best-effort: package names differ across
+# distros (e.g. libasound2 vs libasound2t64) and some are missing in minimal
+# sandboxes. If a few are absent, we still want the rest of the setup to run.
+echo "==> Installing browser libraries (best-effort)"
+apt-get install -y -qq \
+  libnss3 libatk-bridge2.0-0 libx11-xcb1 libxcomposite1 libxcursor1 \
+  libxdamage1 libxrandr2 libgbm1 libasound2 libasound2t64 \
+  libpangocairo-1.0-0 libgtk-3-0 \
+  >/dev/null || echo "NOTE: some browser libs unavailable; will attempt Chrome anyway"
 
 # --- Node.js 22 (LTS) if not present or too old ---------------------------
 echo "==> Ensuring Node.js >= 22"
@@ -64,5 +75,5 @@ echo ""
 echo "==========================================================="
 echo " SETUP COMPLETE ✅"
 echo " Now start the server with:"
-echo "   cd $SERVER_DIR && sudo bash vps-run.sh"
+echo "   cd $SERVER_DIR && bash vps-run.sh"
 echo "==========================================================="
