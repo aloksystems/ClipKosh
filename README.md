@@ -48,13 +48,16 @@ Then open **http://localhost:3000**.
 > Example: `set YOUTUBE_COOKIES=C:\path\to\cookies.txt`.
 >
 > On **Render (or any host where you can't upload a file easily)**, export the
-> cookie file contents to base64 and set the single-line `YOUTUBE_COOKIES_B64`
-> env variable instead:
+> cookie file to a compact base64 and set the single-line `YOUTUBE_COOKIES_B64`
+> env variable instead. Use the included helper so the value stays small —
+> Render fails deploys with "argument list too long" if a full cookie file
+> (~178 KB) is set as an env variable:
 > ```powershell
-> certutil -encode cookies.txt cookies.b64
+> node server\make-cookies-b64.js D:\Downloads\cookies.txt D:\cookies-compact.b64
 > ```
-> Then paste the base64 text into the service's `YOUTUBE_COOKIES_B64` variable.
-> The server decodes it and writes a temporary cookie file at startup.
+> Then paste the contents of `D:\cookies-compact.b64` (a single line) into the
+> service's `YOUTUBE_COOKIES_B64` variable. The server decodes it and writes a
+> temporary cookie file at startup.
 >
 > Without cookies, age-restricted videos return a clear "requires sign-in"
 > message instead of silently failing. Note the bot-check ("sign in to confirm
