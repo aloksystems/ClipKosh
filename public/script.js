@@ -140,46 +140,56 @@
   }
 
   function setupQualitySelects(data) {
-    if (!data.formats || !data.formats.video || !data.formats.video.length) {
-      qualityWrap.hidden = true;
-      return;
-    }
+    var videos = data.formats && data.formats.video ? data.formats.video : [];
+    var audios = data.formats && data.formats.audio ? data.formats.audio : [];
+    var isYt = (data.platform || "").toLowerCase() === "youtube";
 
-    window.__ckVideos = data.formats.video;
-    window.__ckAudios = data.formats.audio || [];
+    window.__ckVideos = videos;
+    window.__ckAudios = audios;
     window.__ckPlatform = data.platform;
     window.__ckWatch = data.watch || "";
 
-    // Video quality options
-    videoQuality.innerHTML = "";
-    data.formats.video.forEach(function (v, i) {
-      var opt = document.createElement("option");
-      opt.value = String(i);
-      opt.textContent = v.label + (v.hasAudio ? "" : " (needs audio merge)");
-      videoQuality.appendChild(opt);
-      if (v.id === data.formats.defVideoId) videoQuality.selectedIndex = i;
-    });
+    // Video quality — only show when there's a real choice.
+    var videoLabel = videoQuality.closest(".quality-select");
+    if (videos.length > 1) {
+      videoQuality.innerHTML = "";
+      videos.forEach(function (v, i) {
+        var opt = document.createElement("option");
+        opt.value = String(i);
+        opt.textContent = v.label + (v.hasAudio ? "" : " (needs audio merge)");
+        videoQuality.appendChild(opt);
+        if (v.id === data.formats.defVideoId) videoQuality.selectedIndex = i;
+      });
+      if (videoLabel) videoLabel.hidden = false;
+    } else {
+      videoQuality.innerHTML = "";
+      if (videoLabel) videoLabel.hidden = true;
+    }
 
-    // Audio bitrate options
-    audioQuality.innerHTML = "";
-    if (window.__ckAudios.length) {
-      window.__ckAudios.forEach(function (a, i) {
+    // MP3 bitrate — only meaningful for YouTube (separate audio tracks).
+    // Instagram/Facebook videos already carry audio inside the MP4.
+    var audioLabel = audioQuality.closest(".quality-select");
+    if (isYt && audios.length) {
+      audioQuality.innerHTML = "";
+      audios.forEach(function (a, i) {
         var opt = document.createElement("option");
         opt.value = String(i);
         opt.textContent = a.label + (a.ext ? " (" + a.ext + ")" : "");
         audioQuality.appendChild(opt);
         if (a.id === data.formats.defAudioId) audioQuality.selectedIndex = i;
       });
+      if (audioLabel) audioLabel.hidden = false;
     } else {
-      var only = document.createElement("option");
-      only.value = "";
-      only.textContent = "128 kbps";
-      audioQuality.appendChild(only);
+      audioQuality.innerHTML = "";
+      if (audioLabel) audioLabel.hidden = true;
     }
 
-    qualityWrap.hidden = false;
-    videoQuality.addEventListener("change", applyQualitySelections);
-    audioQuality.addEventListener("change", applyQualitySelections);
+    // Hide the whole row when there's nothing to choose.
+    qualityWrap.hidden = videos.length <= 1 && !(isYt && audios.length);
+
+    // Use onchange (not addEventListener) so repeated resolves never stack handlers.
+    videoQuality.onchange = applyQualitySelections;
+    audioQuality.onchange = applyQualitySelections;
     applyQualitySelections();
   }
 
