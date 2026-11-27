@@ -54,8 +54,33 @@
     input.disabled = on;
   }
 
-  function showError(msg) {
-    errorBox.textContent = msg;
+  // Human-readable hint for the server's yt-dlp detail codes.
+  function ytDetailHint(detail) {
+    switch (detail) {
+      case "BOT":
+        return "YouTube flagged this request as automated (bot check). Try again in a few minutes.";
+      case "AGE":
+        return "This video is age-restricted and needs sign-in cookies configured on the server.";
+      case "REGION":
+        return "This video isn't available in your region.";
+      case "PRIVATE":
+        return "Private videos can't be downloaded without the owner's access.";
+      case "UNAVAILABLE":
+        return "This video is unavailable or has been removed.";
+      default:
+        return "";
+    }
+  }
+
+  function showError(msg, detail) {
+    errorBox.innerHTML = "";
+    errorBox.appendChild(document.createTextNode(msg));
+    if (detail) {
+      var hint = document.createElement("div");
+      hint.className = "error-detail";
+      hint.textContent = ytDetailHint(detail);
+      errorBox.appendChild(hint);
+    }
     errorBox.hidden = false;
   }
 
@@ -153,7 +178,7 @@
           return;
         }
         if (res.data && res.data.error) {
-          showError(res.data.error);
+          showError(res.data.error, res.data.detail);
           return;
         }
         // A 404/401/405 with a non-JSON body almost always means the page is

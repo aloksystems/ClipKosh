@@ -124,6 +124,7 @@ input { font-family: inherit; }
   margin-top: 12px; padding: 11px 14px; font-size: 14px; border-radius: 12px;
   color: #ffb4b4; background: rgba(255,80,80,0.1); border: 1px solid rgba(255,80,80,0.28);
 }
+.error-detail { margin-top: 6px; font-size: 13px; color: var(--muted); }
 .chips { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; margin-top: 22px; }
 .chips li {
   list-style: none; font-size: 13px; font-weight: 500; color: var(--muted);
