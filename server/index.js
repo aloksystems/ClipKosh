@@ -71,6 +71,58 @@ const YT_BGUTIL_HOME =
 // mweb is the client the bgutil PO token provider is designed to pair with.
 const YT_CLIENTS = ["", "mweb", "tv_embedded", "android"];
 
+/*
+ * Optional tunables (all env-gated, sensible defaults when unset):
+ *  - YT_IMPERSONATE:  e.g. "chrome" — pass --impersonate to yt-dlp (helps a
+ *    lot against YouTube's bot check, but needs the curl_cffi package).
+ *  - YT_RETRY_DELAY_MS: pause between player-client fallback attempts.
+ *  - RESOLVE_CACHE_TTL_MS: how long a resolved YouTube result is reused.
+ *  - YT_MAX_CONCURRENCY: max simultaneous yt-dlp/ffmpeg child processes.
+ */
+const YT_IMPERSONATE = process.env.YT_IMPERSONATE || "";
+const YT_RETRY_DELAY_MS = Number(process.env.YT_RETRY_DELAY_MS) || 1000;
+const RESOLVE_CACHE_TTL_MS =
+  Number(process.env.RESOLVE_CACHE_TTL_MS) || 5 * 60 * 1000;
+const resolveCache = new Map();
+function cacheGet(key) {
+  const hit = resolveCache.get(key);
+  if (hit && hit.exp > Date.now()) return hit.value;
+  if (hit) resolveCache.delete(key);
+  return undefined;
+}
+function cacheSet(key, value) {
+  const now = Date.now();
+  // Keep the map bounded: drop expired entries first, then hard-reset if huge.
+  if (resolveCache.size > 2000) {
+    for (const [k, v] of resolveCache) if (v.exp < now) resolveCache.delete(k);
+    if (resolveCache.size > 2000) resolveCache.clear();
+  }
+  resolveCache.set(key, { value, exp: now + RESOLVE_CACHE_TTL_MS });
+}
+
+/* A tiny semaphore so heavy external jobs (yt-dlp/ffmpeg) never spawn more than
+ * `max` at once — this is what keeps the server stable under bursts of requests. */
+function makeLimiter(max) {
+  let active = 0;
+  const queue = [];
+  function next() {
+    if (active >= max || !queue.length) return;
+    active++;
+    const job = queue.shift();
+    job().finally(() => {
+      active--;
+      next();
+    });
+  }
+  return function run(fn) {
+    return new Promise((resolve, reject) => {
+      queue.push(() => Promise.resolve().then(fn).then(resolve, reject));
+      next();
+    });
+  };
+}
+const ytOpLimiter = makeLimiter(Number(process.env.YT_MAX_CONCURRENCY) || 2);
+
 function ytPotArgs() {
   if (YT_BGUTIL_HOME && fs.existsSync(path.join(YT_BGUTIL_HOME, "build", "main.js"))) {
     return [
@@ -85,10 +137,12 @@ function ytAttemptArgs(clientIdx) {
   if (YT_PO_TOKEN) {
     return ["--extractor-args", "youtube:po_token=" + YT_PO_TOKEN];
   }
+  const args = [];
+  if (YT_IMPERSONATE) {
+    args.push("--impersonate", YT_IMPERSONATE);
+  }
   const client = YT_CLIENTS[clientIdx] || "";
-  const args = client
-    ? ["--extractor-args", "youtube:player_client=" + client]
-    : [];
+  if (client) args.push("--extractor-args", "youtube:player_client=" + client);
   return args.concat(ytPotArgs());
 }
 function sleep(ms) {
@@ -107,13 +161,17 @@ if (!process.env.PUPPETEER_CACHE_DIR) {
   );
 }
 
-/** Is the yt-dlp binary usable on this server? */
+/** Is the yt-dlp binary usable on this server? (memoized after first check) */
+let ytdlpReadyPromise = null;
 function hasYtDlp() {
-  return new Promise((resolve) => {
-    execFile(YTDLP, ["--version"], { timeout: 15000 }, (err, stdout) => {
-      resolve(!err && /^20\d\d\./.test(String(stdout || "").trim()));
+  if (!ytdlpReadyPromise) {
+    ytdlpReadyPromise = new Promise((resolve) => {
+      execFile(YTDLP, ["--version"], { timeout: 15000 }, (err, stdout) => {
+        resolve(!err && /^20\d\d\./.test(String(stdout || "").trim()));
+      });
     });
-  });
+  }
+  return ytdlpReadyPromise;
 }
 
 app.use(express.json());
@@ -267,20 +325,23 @@ function runYtDlp(extraArgs, videoUrl, opts) {
   args.push(...extraArgs);
   if (useCookies) args.push("--cookies", YT_COOKIES_FILE);
   args.push(videoUrl);
-  return new Promise((resolve) => {
-    execFile(
-      YTDLP,
-      args,
-      { timeout: 90000, maxBuffer: 16 * 1024 * 1024 },
-      (err, stdout, stderr) => {
-        resolve({
-          stdout: String(stdout || ""),
-          stderr: String(stderr || ""),
-          err,
-        });
-      }
-    );
-  });
+  return ytOpLimiter(
+    () =>
+      new Promise((resolve) => {
+        execFile(
+          YTDLP,
+          args,
+          { timeout: 90000, maxBuffer: 16 * 1024 * 1024 },
+          (err, stdout, stderr) => {
+            resolve({
+              stdout: String(stdout || ""),
+              stderr: String(stderr || ""),
+              err,
+            });
+          }
+        );
+      })
+  );
 }
 
 /**
@@ -356,7 +417,7 @@ async function getYtInfo(videoUrl) {
       }
     }
     // Transient bot-check — pause briefly before trying the next config.
-    await sleep(3000);
+    await sleep(YT_RETRY_DELAY_MS);
   }
   return null;
 }
@@ -517,20 +578,23 @@ async function downloadYtFormatTry(videoUrl, fmtSpec, outPath, clientIdx) {
   if (fmtSpec.includes("+")) args.push("--merge-output-format", "mp4");
   args.push(videoUrl);
 
-  const r = await new Promise((resolve) => {
-    execFile(
-      YTDLP,
-      args,
-      { timeout: 300000, maxBuffer: 32 * 1024 * 1024 },
-      (err, stdout, stderr) => {
-        resolve({
-          stdout: String(stdout || ""),
-          stderr: String(stderr || ""),
-          err,
-        });
-      }
-    );
-  });
+  const r = await ytOpLimiter(
+    () =>
+      new Promise((resolve) => {
+        execFile(
+          YTDLP,
+          args,
+          { timeout: 300000, maxBuffer: 32 * 1024 * 1024 },
+          (err, stdout, stderr) => {
+            resolve({
+              stdout: String(stdout || ""),
+              stderr: String(stderr || ""),
+              err,
+            });
+          }
+        );
+      })
+  );
 
   if (!r.err) return r;
   const reason = classifyYtError(r.stderr).code;
@@ -539,7 +603,7 @@ async function downloadYtFormatTry(videoUrl, fmtSpec, outPath, clientIdx) {
     !YT_PO_TOKEN &&
     clientIdx < YT_CLIENTS.length - 1
   ) {
-    await sleep(3500);
+    await sleep(YT_RETRY_DELAY_MS);
     return downloadYtFormatTry(videoUrl, fmtSpec, outPath, clientIdx + 1);
   }
   return r;
@@ -805,6 +869,12 @@ async function extractMedia(pageUrl, platform) {
       throw missing;
     }
 
+    // Reuse a recent resolution for the same video — the expensive yt-dlp
+    // walk (and any bot-check retries) only runs once per video per TTL.
+    const cacheKey = "yt:" + id;
+    const cached = cacheGet(cacheKey);
+    if (cached) return cached;
+
     const info = await getYtInfo(pageUrl);
     if (!info) {
       // No usable info — figure out *why* so the user gets a specific message.
@@ -826,12 +896,14 @@ async function extractMedia(pageUrl, platform) {
       throw blocked;
     }
 
-    return {
+    const result = {
       video: formats.defVideo.url,
       thumb: "https://i.ytimg.com/vi/" + id + "/hqdefault.jpg",
       audioUrl: formats.defAudio ? formats.defAudio.url : null,
       formats,
     };
+    cacheSet(cacheKey, result);
+    return result;
   }
   return null;
 }

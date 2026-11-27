@@ -73,6 +73,17 @@ Download links are generated automatically from the host the request arrives on 
 
 To plug in an external resolver API: `set RESOLVER_URL=https://your-resolver.example/api`.
 
+### Performance / load tunables (all optional)
+
+| Env var | Default | Effect |
+| --- | --- | --- |
+| `YT_IMPERSONATE` | *(off)* | e.g. `chrome` → passes `--impersonate chrome` to `yt-dlp` (strongly reduces YouTube bot-checks; needs the `curl_cffi` package installed). |
+| `YT_RETRY_DELAY_MS` | `1000` | Pause between `yt-dlp` player-client fallback attempts. |
+| `RESOLVE_CACHE_TTL_MS` | `300000` | How long a resolved YouTube result (formats/URLs) is reused so repeat lookups skip the slow `yt-dlp` walk. |
+| `YT_MAX_CONCURRENCY` | `2` | Max simultaneous `yt-dlp`/`ffmpeg` child processes — keeps the server stable under bursts. |
+
+The frontend also auto-starts processing the moment you paste a link (no need to press Download).
+
 ## Running it all the time + using it from your phone
 
 Two things are usually needed: (1) have the server keep running even when you're not babysitting a terminal, and (2) reach it from your phone. These are **separate** problems — pick what fits.

@@ -364,6 +364,25 @@
 
   input.addEventListener("input", clearError);
 
+  // Auto-start processing the moment a link is pasted (no need to press the
+  // Download button). We wait one tick so the pasted value is actually in the
+  // field first, and we debounce so pasting twice doesn't fire double requests.
+  var pasteTimer = null;
+  input.addEventListener("paste", function () {
+    clearTimeout(pasteTimer);
+    pasteTimer = setTimeout(function () {
+      var url = prepareUrl(input.value);
+      if (!url) return;
+      if (!looksLikeSupported(url)) {
+        clearError();
+        return showError(
+          "That doesn't look like an Instagram, Facebook, or YouTube link. Copy a share link and paste it here."
+        );
+      }
+      resolveReel(url);
+    }, 80);
+  });
+
   // Show whether the API (Express backend) is actually reachable. If it shows
   // "API offline", the current URL is serving static files only, so the
   // backend isn't running there.
