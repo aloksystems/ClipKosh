@@ -19,6 +19,7 @@
 const express = require("express");
 const path = require("path");
 const fs = require("fs");
+const os = require("os");
 const { execFile, spawn } = require("child_process");
 
 const app = express();
@@ -144,11 +145,43 @@ function parseFacebookVideo(html) {
 }
 
 /**
- * Optional cookie file (e.g. from "Get cookies.txt LOCALLY" extension) for
- * resolving age-restricted / sign-in YouTube videos. Path can be a local file
- * or a URL (yt-dlp supports both).
+ * Resolve where yt-dlp should read cookies from. Supports:
+ *   - YOUTUBE_COOKIES / COOKIES_FILE   → a file path on the server
+ *   - YOUTUBE_COOKIES_B64              → base64 of the full Netscape cookie file
+ *     (easiest: paste into a single-line Render env variable)
+ * Returns null when no cookies are configured.
  */
-const YT_COOKIES = process.env.YOUTUBE_COOKIES || process.env.COOKIES_FILE || null;
+function resolveCookieFile() {
+  const b64 = process.env.YOUTUBE_COOKIES_B64;
+  if (b64) {
+    try {
+      const decoded = Buffer.from(b64, "base64").toString("utf8");
+      const p = path.join(os.tmpdir(), "clipkosh-cookies-" + process.pid + ".txt");
+      fs.writeFileSync(p, decoded);
+      return p;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  const raw = process.env.YOUTUBE_COOKIES || process.env.COOKIES_FILE || null;
+  if (!raw) return null;
+  // Already a real file on disk — use it directly.
+  if (fs.existsSync(raw)) return raw;
+  // Inline Netscape cookie content → write it to a temp file.
+  if (/^# Netscape/i.test(raw.trim()) || /\tyoutube\.com\t/.test(raw)) {
+    const p = path.join(os.tmpdir(), "clipkosh-cookies-" + process.pid + ".txt");
+    try {
+      fs.writeFileSync(p, raw);
+      return p;
+    } catch (e) {
+      return null;
+    }
+  }
+  return raw;
+}
+
+const YT_COOKIES_FILE = resolveCookieFile();
 
 /**
  * Run yt-dlp to print a single direct stream URL.
@@ -165,7 +198,7 @@ function ytDlpUrl(videoUrl, format) {
       "-f",
       format,
     ];
-    if (YT_COOKIES) args.push("--cookies", YT_COOKIES);
+    if (YT_COOKIES_FILE) args.push("--cookies", YT_COOKIES_FILE);
     args.push(videoUrl);
 
     execFile(
@@ -400,10 +433,16 @@ async function extractMedia(pageUrl, platform) {
       throw missing;
     }
 
-    const [dl, audio] = await Promise.all([
-      ytDlpUrl(pageUrl, "mp4[height<=1080]/best[ext=mp4]/mp4/best"),
-      ytDlpUrl(pageUrl, "bestaudio[ext=m4a]/bestaudio"),
-    ]);
+    let dl = await ytDlpUrl(pageUrl, "mp4[height<=1080]/best[ext=mp4]/mp4/best");
+    let audio = await ytDlpUrl(pageUrl, "bestaudio[ext=m4a]/bestaudio");
+
+    // YouTube's bot-check is often transient — retry once after a short pause.
+    if (!dl.url && classifyYtError(dl.stderr).code === "BOT") {
+      await new Promise((r) => setTimeout(r, 4000));
+      dl = await ytDlpUrl(pageUrl, "mp4[height<=1080]/best[ext=mp4]/mp4/best");
+      audio = await ytDlpUrl(pageUrl, "bestaudio[ext=m4a]/bestaudio");
+    }
+
     if (dl.url) {
       return {
         video: dl.url,

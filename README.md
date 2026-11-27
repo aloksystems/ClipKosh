@@ -45,9 +45,22 @@ Then open **http://localhost:3000**.
 > **Age-restricted / private YouTube videos:** set the `YOUTUBE_COOKIES` env
 > variable to a cookies file path (e.g. exported via the "Get cookies.txt
 > LOCALLY" browser extension) so `yt-dlp` can pass sign-in/age verification.
-> Example: `set YOUTUBE_COOKIES=C:\path\to\cookies.txt` (or add it to the
-> service's environment variables in Render). Without it, these videos return a
-> clear "age-restricted / requires sign-in" message instead of silently failing.
+> Example: `set YOUTUBE_COOKIES=C:\path\to\cookies.txt`.
+>
+> On **Render (or any host where you can't upload a file easily)**, export the
+> cookie file contents to base64 and set the single-line `YOUTUBE_COOKIES_B64`
+> env variable instead:
+> ```powershell
+> certutil -encode cookies.txt cookies.b64
+> ```
+> Then paste the base64 text into the service's `YOUTUBE_COOKIES_B64` variable.
+> The server decodes it and writes a temporary cookie file at startup.
+>
+> Without cookies, age-restricted videos return a clear "requires sign-in"
+> message instead of silently failing. Note the bot-check ("sign in to confirm
+> you're not a bot") is mostly IP-based, so cookies help with age/private videos
+> but may not fully defeat the check on shared server IPs — the server retries
+> once automatically for that case.
 
 There is also a tiny **`GET /api/health`** endpoint (returns `{"ok":true}`). The frontend pings it on load and shows a small status badge in the footer — **API online / API offline** — so you can instantly tell whether the page you're viewing is talking to Express or to a static file server.
 
