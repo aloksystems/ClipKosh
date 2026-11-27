@@ -55,15 +55,41 @@ let YT_PO_TOKEN = null;
     } catch (_) { /* ignore malformed base64 */ }
   }
 }
-const YT_CLIENTS = ["", "tv_embedded", "android"];
+
+/*
+ * bgutil PO Token provider (generation-script mode).
+ * Installed by render-build.sh into $HOME/bgutil-ytdlp-pot-provider/server.
+ * When present, the bgutil plugin will invoke that script to mint PO tokens,
+ * which is the modern way to satisfy YouTube's bot/PO checks.
+ */
+const YT_BGUTIL_HOME =
+  process.env.YT_BGUTIL_HOME ||
+  path.join(os.homedir(), "bgutil-ytdlp-pot-provider", "server") ||
+  null;
+
+// Player-client fallback chain (empty string = default web).
+// mweb is the client the bgutil PO token provider is designed to pair with.
+const YT_CLIENTS = ["", "mweb", "tv_embedded", "android"];
+
+function ytPotArgs() {
+  if (YT_BGUTIL_HOME && fs.existsSync(path.join(YT_BGUTIL_HOME, "build", "main.js"))) {
+    return [
+      "--extractor-args",
+      "youtubepot-bgutilscript:server_home=" + YT_BGUTIL_HOME,
+    ];
+  }
+  return [];
+}
+
 function ytAttemptArgs(clientIdx) {
   if (YT_PO_TOKEN) {
     return ["--extractor-args", "youtube:po_token=" + YT_PO_TOKEN];
   }
   const client = YT_CLIENTS[clientIdx] || "";
-  return client
+  const args = client
     ? ["--extractor-args", "youtube:player_client=" + client]
     : [];
+  return args.concat(ytPotArgs());
 }
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));

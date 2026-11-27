@@ -31,6 +31,23 @@ yt-dlp --version
 echo "==> yt-dlp EJS challenge solver (SABR / signature solving)"
 pip3 install -q yt-dlp-ejs
 
+echo "==> YouTube PO Token provider (bgutil) — optional, mitigates datacenter-IP bot checks"
+# Pin plugin and provider to the same release so they interoperate.
+pip3 install -q -U "bgutil-ytdlp-pot-provider==2.0.2" || echo "POT_PLUGIN_PIP_FAILED"
+POT_DIR="${HOME}/bgutil-ytdlp-pot-provider"
+if [ ! -d "${POT_DIR}/server/build" ]; then
+  git clone --depth 1 --single-branch --branch 2.0.2 \
+    https://github.com/Brainicism/bgutil-ytdlp-pot-provider.git "${POT_DIR}" \
+    >/dev/null 2>&1 || echo "POT_CLONE_FAILED"
+  if [ -d "${POT_DIR}/server" ]; then
+    ( cd "${POT_DIR}/server" && npm ci >/dev/null 2>&1 && npx tsc ) \
+      && echo "POT_PROVIDER_BUILT" || echo "POT_PROVIDER_BUILD_FAILED"
+  fi
+else
+  echo "POT_PROVIDER_ALREADY_BUILT"
+fi
+echo "POT server_home candidate: ${POT_DIR}/server"
+
 echo "==> ffmpeg check (needed for DASH merge + MP3)"
 (command -v ffmpeg && ffmpeg -version | head -1) || echo "FFMPEG_MISSING_ON_PATH"
 echo "==> imageio-ffmpeg fallback"
