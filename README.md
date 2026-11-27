@@ -22,6 +22,8 @@ Browsers cannot fetch these media files directly (CORS + platform protections), 
 1. **`POST /api/resolve`** — detects the platform (Instagram / Facebook / YouTube), extracts the direct video URL plus real file size (HEAD), and returns it as JSON (with a `downloadUrl`).
 2. **`GET /api/download?url=…`** — proxies/streams the video to the browser as an attachment. Supports HTTP **Range** requests, so the result card's inline `<video>` preview plays directly from the stream.
 3. **`GET /api/thumb?url=…`** — optional image proxy that fetches thumbnails with the right referer (CDNs block hotlinking from other origins).
+4. **`GET /api/download-yt?url=…&fmt=…&aud=…`** — YouTube video download via `yt-dlp` (the platform's direct googlevideo URLs are throttled/bot-protected, so downloads go through `yt-dlp`, which handles signatures, cookies, and DASH video+audio merging). Yields an MP4.
+5. **`GET /api/download-audio-yt?url=…&fmt=…&abr=…`** — YouTube audio → MP3 via `yt-dlp` + ffmpeg transcode (abr 32–320).
 
 Media extraction per platform:
 - **Instagram** — headless Chromium render (Puppeteer) → static `og:video` / `video_versions` scrape → optional external resolver.

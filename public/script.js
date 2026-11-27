@@ -13,6 +13,9 @@
   var metaEl = document.getElementById("result-meta");
   var dlLink = document.getElementById("dl-link");
   var audioLink = document.getElementById("dl-audio");
+  var qualityWrap = document.getElementById("quality-selects");
+  var videoQuality = document.getElementById("video-quality");
+  var audioQuality = document.getElementById("audio-quality");
   var copyBtn = document.getElementById("copy-link");
   var clearBtn = document.getElementById("clear-result");
   var sampleBtn = document.getElementById("sample-link");
@@ -130,8 +133,116 @@
       audioLink.hidden = true;
     }
 
+    setupQualitySelects(data);
+
     resultSection.hidden = false;
     resultSection.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+
+  function setupQualitySelects(data) {
+    if (!data.formats || !data.formats.video || !data.formats.video.length) {
+      qualityWrap.hidden = true;
+      return;
+    }
+
+    window.__ckVideos = data.formats.video;
+    window.__ckAudios = data.formats.audio || [];
+    window.__ckPlatform = data.platform;
+    window.__ckWatch = data.watch || "";
+
+    // Video quality options
+    videoQuality.innerHTML = "";
+    data.formats.video.forEach(function (v, i) {
+      var opt = document.createElement("option");
+      opt.value = String(i);
+      opt.textContent = v.label + (v.hasAudio ? "" : " (needs audio merge)");
+      videoQuality.appendChild(opt);
+      if (v.id === data.formats.defVideoId) videoQuality.selectedIndex = i;
+    });
+
+    // Audio bitrate options
+    audioQuality.innerHTML = "";
+    if (window.__ckAudios.length) {
+      window.__ckAudios.forEach(function (a, i) {
+        var opt = document.createElement("option");
+        opt.value = String(i);
+        opt.textContent = a.label + (a.ext ? " (" + a.ext + ")" : "");
+        audioQuality.appendChild(opt);
+        if (a.id === data.formats.defAudioId) audioQuality.selectedIndex = i;
+      });
+    } else {
+      var only = document.createElement("option");
+      only.value = "";
+      only.textContent = "128 kbps";
+      audioQuality.appendChild(only);
+    }
+
+    qualityWrap.hidden = false;
+    videoQuality.addEventListener("change", applyQualitySelections);
+    audioQuality.addEventListener("change", applyQualitySelections);
+    applyQualitySelections();
+  }
+
+  function selectedVideo() {
+    var i = parseInt(videoQuality.value, 10);
+    return (window.__ckVideos || [])[i] || null;
+  }
+
+  function selectedAudio() {
+    var i = parseInt(audioQuality.value, 10);
+    var list = window.__ckAudios || [];
+    var a = list[i] || list[list.length - 1] || null;
+    return a;
+  }
+
+  function applyQualitySelections() {
+    var v = selectedVideo();
+    if (!v) return;
+
+    var isYt = window.__ckPlatform === "youtube";
+    var watch = window.__ckWatch || "";
+    var url;
+
+    if (isYt) {
+      url =
+        "/api/download-yt?url=" +
+        encodeURIComponent(watch) +
+        "&fmt=" +
+        encodeURIComponent(v.id);
+      if (!v.hasAudio) {
+        var a0 = selectedAudio();
+        if (a0) url += "&aud=" + encodeURIComponent(a0.id);
+      }
+    } else {
+      url = "/api/download?url=" + encodeURIComponent(v.url);
+      if (!v.hasAudio) {
+        var a1 = selectedAudio();
+        var aUrl = a1 ? a1.url : "";
+        if (aUrl) url += "&merge=1&audioUrl=" + encodeURIComponent(aUrl);
+      }
+    }
+    dlLink.href = url;
+    preview.src = url;
+    currentDownloadUrl = url;
+
+    var aSel = selectedAudio();
+    if (aSel) {
+      audioLink.href = isYt
+        ? "/api/download-audio-yt?url=" +
+          encodeURIComponent(watch) +
+          "&fmt=" +
+          encodeURIComponent(aSel.id) +
+          "&abr=" +
+          (aSel.abr || 192)
+        : "/api/download-audio?url=" +
+          encodeURIComponent(aSel.url) +
+          "&abr=" +
+          (aSel.abr || 192);
+      audioLink.hidden = false;
+    } else {
+      audioLink.removeAttribute("href");
+      audioLink.hidden = true;
+    }
   }
 
   function clearResult() {
@@ -140,6 +251,11 @@
     dlLink.removeAttribute("href");
     audioLink.removeAttribute("href");
     audioLink.hidden = true;
+    qualityWrap.hidden = true;
+    videoQuality.innerHTML = "";
+    audioQuality.innerHTML = "";
+    window.__ckVideos = null;
+    window.__ckAudios = null;
     preview.pause();
     preview.removeAttribute("src");
     preview.load();
@@ -151,7 +267,7 @@
     clearResult();
 
     var controller = new AbortController();
-    var timer = setTimeout(function () { controller.abort(); }, 45000);
+    var timer = setTimeout(function () { controller.abort(); }, 120000);
 
     fetch(RESOLVE_ENDPOINT, {
       method: "POST",

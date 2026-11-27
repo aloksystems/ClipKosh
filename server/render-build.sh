@@ -30,3 +30,9 @@ yt-dlp --version
 
 echo "==> yt-dlp EJS challenge solver (SABR / signature solving)"
 pip3 install -q yt-dlp-ejs
+
+echo "==> ffmpeg check (needed for DASH merge + MP3)"
+(command -v ffmpeg && ffmpeg -version | head -1) || echo "FFMPEG_MISSING_ON_PATH"
+echo "==> imageio-ffmpeg fallback"
+pip3 install -q imageio-ffmpeg
+python -c "import imageio_ffmpeg as i; print('imageio ffmpeg:', i.get_ffmpeg_exe())"

@@ -19,7 +19,9 @@
 const express = require("express");
 const path = require("path");
 const fs = require("fs");
+const fsp = fs.promises;
 const os = require("os");
+const crypto = require("crypto");
 const { execFile, spawn } = require("child_process");
 
 const app = express();
@@ -32,6 +34,7 @@ const USER_AGENT =
   "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/158.0.0.0 Safari/537.36";
 
 const YTDLP = process.env.YTDLP_PATH || "yt-dlp";
+let FFMPEG_BIN = process.env.FFMPEG_PATH || null;
 
 // Puppeteer must find the Chrome installed during build. Render's build
 // installs Chrome into the in-app cache (via render-build.sh) so it survives
@@ -194,40 +197,276 @@ const YT_AUDIO_FMT =
   "bestaudio[ext=m4a][protocol^=https]/bestaudio[ext=m4a]/bestaudio";
 
 /**
- * Run yt-dlp to print a single direct stream URL.
- * Returns { url, stderr } — url is null when nothing usable was found.
+ * Run yt-dlp once with extra args (already includes --no-playlist/--no-warnings
+ * /--skip-download). Returns { stdout, stderr }.
  */
-function ytDlpUrl(videoUrl, format) {
+function runYtDlp(extraArgs, videoUrl) {
+  const args = ["--no-playlist", "--no-warnings", "--skip-download"];
+  args.push(...extraArgs);
+  if (YT_COOKIES_FILE) args.push("--cookies", YT_COOKIES_FILE);
+  args.push(videoUrl);
   return new Promise((resolve) => {
-    const args = [
-      "--no-playlist",
-      "--no-warnings",
-      "--skip-download",
-      "--print",
-      "%(url)s",
-      "-f",
-      format,
-      // YouTube's signature / n-challenge (and SABR-only accounts) require a JS
-      // runtime to solve. Node is always present (this is a Node server).
-      "--js-runtime",
-      "node",
-    ];
-    if (YT_COOKIES_FILE) args.push("--cookies", YT_COOKIES_FILE);
-    args.push(videoUrl);
-
     execFile(
       YTDLP,
       args,
-      { timeout: 90000, maxBuffer: 4 * 1024 * 1024 },
+      { timeout: 90000, maxBuffer: 16 * 1024 * 1024 },
       (err, stdout, stderr) => {
-        const line = String(stdout || "").trim().split("\n")[0];
         resolve({
-          url: /^https?:\/\//.test(line) ? line : null,
+          stdout: String(stdout || ""),
           stderr: String(stderr || ""),
+          err,
         });
       }
     );
   });
+}
+
+/**
+ * Locate an ffmpeg binary. Priority: FFMPEG_PATH env → "ffmpeg" on PATH →
+ * imageio-ffmpeg (pip) binary. Called once at startup.
+ */
+function resolveFfmpeg() {
+  if (process.env.FFMPEG_PATH) {
+    FFMPEG_BIN = process.env.FFMPEG_PATH;
+    return Promise.resolve();
+  }
+  const onPath = new Promise((resolve) => {
+    execFile("ffmpeg", ["-version"], { timeout: 5000 }, (e) => resolve(!e));
+  });
+  return onPath.then((ok) => {
+    if (ok) {
+      FFMPEG_BIN = "ffmpeg";
+      return;
+    }
+    return new Promise((resolve) => {
+      execFile(
+        "python",
+        ["-c", "import imageio_ffmpeg as i; print(i.get_ffmpeg_exe())"],
+        { timeout: 10000 },
+        (err, stdout) => {
+          FFMPEG_BIN = !err && String(stdout).trim() ? String(stdout).trim() : "ffmpeg";
+          resolve();
+        }
+      );
+    });
+  });
+}
+
+/** Fetch the full YouTube info JSON (one JS solve, faster than two runs). */
+async function getYtInfo(videoUrl) {
+  let r = await runYtDlp(["--js-runtime", "node", "--print-json"], videoUrl);
+  // YouTube's bot-check is often transient — retry once after a short pause.
+  if (classifyYtError(r.stderr).code === "BOT") {
+    await new Promise((res) => setTimeout(res, 4000));
+    r = await runYtDlp(["--js-runtime", "node", "--print-json"], videoUrl);
+  }
+  if (r.err) return null;
+  try {
+    return JSON.parse(r.stdout.trim());
+  } catch (e) {
+    return null;
+  }
+}
+
+/** Only direct media URLs (never m3u8 HLS manifests) are downloadable. */
+function isDirectFormat(f) {
+  return (
+    f &&
+    /^https?:\/\//.test(f.url || "") &&
+    !/\.m3u8(\?|$)/i.test(f.url) &&
+    f.protocol !== "m3u8_native"
+  );
+}
+
+/**
+ * Build the selectable video/audio quality lists from yt-dlp's JSON.
+ * Progressive formats combine audio+video; DASH video-only formats need an
+ * ffmpeg merge with the best audio (handled by /api/download?merge=1).
+ */
+function buildFormats(info) {
+  const fmts = (info && info.formats) || [];
+  const video = [];
+  const audio = [];
+  const seenV = new Set();
+  const seenA = new Set();
+
+  for (const f of fmts) {
+    if (!isDirectFormat(f)) continue;
+    const hasV = f.vcodec && f.vcodec !== "none";
+    const hasA = f.acodec && f.acodec !== "none";
+    if (!hasV && !hasA) continue;
+
+    if (hasV) {
+      const h = f.height || f.width || 0;
+      const key = "v" + (h || f.format_id);
+      if (!seenV.has(key)) {
+        seenV.add(key);
+        video.push({
+          id: String(f.format_id),
+          label: h ? h + "p" : "video",
+          height: h || null,
+          ext: f.ext || "mp4",
+          hasAudio: hasA,
+          url: f.url,
+        });
+      }
+    }
+
+    if (hasA && !hasV) {
+      if (!seenA.has(String(f.format_id))) {
+        seenA.add(String(f.format_id));
+        const abr = Math.round(Number(f.abr) || 0);
+        audio.push({
+          id: String(f.format_id),
+          label: abr ? abr + " kbps" : "audio",
+          abr,
+          ext: f.ext || "m4a",
+          url: f.url,
+        });
+      }
+    }
+  }
+
+  video.sort((a, b) => (b.height || 0) - (a.height || 0));
+  audio.sort((a, b) => (a.abr || 0) - (b.abr || 0));
+
+  const defVideo =
+    video.find((v) => v.hasAudio && v.height <= 1080) ||
+    video.find((v) => v.ext === "mp4" && v.height <= 1080) ||
+    video.find((v) => v.ext === "mp4") ||
+    video[0] ||
+    null;
+  const defAudio = [...audio].sort((a, b) => (b.abr || 0) - (a.abr || 0))[0] || null;
+
+  return {
+    video,
+    audio,
+    defVideo,
+    defAudio,
+    defVideoId: defVideo ? defVideo.id : null,
+    defAudioId: defAudio ? defAudio.id : null,
+  };
+}
+
+/** Download a remote URL to a temp file (for ffmpeg transcode/merge). */
+async function fetchToTemp(url, destPath) {
+  const res = await fetch(url, {
+    headers: {
+      "User-Agent": USER_AGENT,
+      Referer: "https://www.youtube.com/",
+    },
+    redirect: "follow",
+    signal: AbortSignal.timeout(120000),
+  });
+  if (!res.ok) throw new Error("HTTP " + res.status);
+  const handle = await fsp.open(destPath, "w");
+  try {
+    for await (const chunk of res.body) {
+      await handle.write(chunk);
+    }
+  } finally {
+    await handle.close();
+  }
+  const st = await fsp.stat(destPath);
+  if (st.size === 0) throw new Error("Empty media stream");
+  return st.size;
+}
+
+function tmpPath(prefix, ext) {
+  return path.join(
+    os.tmpdir(),
+    prefix + "-" + crypto.randomBytes(5).toString("hex") + (ext || ".tmp")
+  );
+}
+
+/** Stream a local file to the HTTP response, honoring backpressure. */
+async function streamFile(filePath, res) {
+  const handle = await fsp.open(filePath, "r");
+  try {
+    const buf = Buffer.alloc(256 * 1024);
+    for (;;) {
+      const { bytesRead } = await handle.read(buf);
+      if (bytesRead === 0) break;
+      const chunk = bytesRead === buf.length ? buf : buf.subarray(0, bytesRead);
+      if (!res.write(chunk)) {
+        await new Promise((r) => res.once("drain", r));
+      }
+    }
+    res.end();
+  } finally {
+    await handle.close();
+  }
+}
+
+/**
+ * Download a YouTube video/audio format via yt-dlp to a local temp file.
+ * yt-dlp handles the 'n' signature, throttling, cookies, and DASH merging,
+ * which raw fetches of googlevideo URLs do not (they hang/timed out).
+ */
+function downloadYtFormat(videoUrl, fmtSpec, outPath) {
+  const args = ["--no-playlist", "--no-warnings", "--newline", "--js-runtime", "node"];
+  if (YT_COOKIES_FILE) args.push("--cookies", YT_COOKIES_FILE);
+  if (FFMPEG_BIN) args.push("--ffmpeg-location", FFMPEG_BIN);
+  args.push("-f", fmtSpec, "-o", outPath);
+  if (fmtSpec.includes("+")) args.push("--merge-output-format", "mp4");
+  args.push(videoUrl);
+  return new Promise((resolve) => {
+    execFile(
+      YTDLP,
+      args,
+      { timeout: 300000, maxBuffer: 32 * 1024 * 1024 },
+      (err, stdout, stderr) => {
+        resolve({
+          stdout: String(stdout || ""),
+          stderr: String(stderr || ""),
+          err,
+        });
+      }
+    );
+  });
+}
+
+/** Merge two direct streams (DASH video-only + audio) into one MP4. */
+async function serveMerged(req, res, vUrl, aUrl) {
+  const vTmp = tmpPath("ck-v", ".mp4");
+  const aTmp = tmpPath("ck-a", ".m4a");
+  const oTmp = tmpPath("ck-m", ".mp4");
+  try {
+    await Promise.all([fetchToTemp(vUrl, vTmp), fetchToTemp(aUrl, aTmp)]);
+    await new Promise((resolve, reject) => {
+      const ff = spawn(FFMPEG_BIN, [
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        vTmp,
+        "-i",
+        aTmp,
+        "-c",
+        "copy",
+        "-movflags",
+        "+faststart",
+        "-shortest",
+        oTmp,
+      ]);
+      let errOut = "";
+      ff.stderr.on("data", (d) => (errOut += d));
+      ff.on("error", reject);
+      ff.on("close", (code) =>
+        code === 0 ? resolve() : reject(new Error("ffmpeg merge failed (" + code + ") " + errOut))
+      );
+    });
+    const st = await fsp.stat(oTmp);
+    res.setHeader("Content-Type", "video/mp4");
+    res.setHeader("Content-Disposition", 'attachment; filename="clipkosh.mp4"');
+    res.setHeader("Content-Length", String(st.size));
+    await streamFile(oTmp, res);
+  } finally {
+    await Promise.all(
+      [vTmp, aTmp, oTmp].map((p) => fsp.rm(p, { force: true }).catch(() => {}))
+    );
+  }
 }
 
 /** Map yt-dlp stderr hints to a friendly, specific user message. */
@@ -447,31 +686,33 @@ async function extractMedia(pageUrl, platform) {
       throw missing;
     }
 
-    let dl = await ytDlpUrl(pageUrl, YT_VIDEO_FMT);
-    let audio = await ytDlpUrl(pageUrl, YT_AUDIO_FMT);
-
-    // YouTube's bot-check is often transient — retry once after a short pause.
-    if (!dl.url && classifyYtError(dl.stderr).code === "BOT") {
-      await new Promise((r) => setTimeout(r, 4000));
-      dl = await ytDlpUrl(pageUrl, YT_VIDEO_FMT);
-      audio = await ytDlpUrl(pageUrl, YT_AUDIO_FMT);
+    const info = await getYtInfo(pageUrl);
+    if (!info) {
+      // No usable info — figure out *why* so the user gets a specific message.
+      const probe = await runYtDlp(["--js-runtime", "node", "--print", "%(url)s", "-f", YT_VIDEO_FMT], pageUrl);
+      const reason = classifyYtError(probe.stderr);
+      const blocked = new Error(reason.message);
+      blocked.code = "YT_RESOLVE_FAILED";
+      blocked.detail = reason.code;
+      throw blocked;
     }
 
-    if (dl.url) {
-      return {
-        video: dl.url,
-        thumb: "https://i.ytimg.com/vi/" + id + "/hqdefault.jpg",
-        audioUrl: audio.url || null,
-      };
+    const formats = buildFormats(info);
+    if (!formats.defVideo) {
+      const blocked = new Error(
+        "Couldn't extract this YouTube video (it may be private, age/region-restricted, or unavailable)."
+      );
+      blocked.code = "YT_RESOLVE_FAILED";
+      blocked.detail = "UNKNOWN";
+      throw blocked;
     }
 
-    // Tool exists but produced nothing — figure out *why* so the user gets a
-    // clear, specific message instead of a generic one.
-    const reason = classifyYtError(dl.stderr);
-    const blocked = new Error(reason.message);
-    blocked.code = "YT_RESOLVE_FAILED";
-    blocked.detail = reason.code;
-    throw blocked;
+    return {
+      video: formats.defVideo.url,
+      thumb: "https://i.ytimg.com/vi/" + id + "/hqdefault.jpg",
+      audioUrl: formats.defAudio ? formats.defAudio.url : null,
+      formats,
+    };
   }
   return null;
 }
@@ -515,18 +756,45 @@ app.post("/api/resolve", async (req, res) => {
       req.protocol;
     const base =
       process.env.BASE_URL || proto + "://" + req.get("host");
-    const audioDownloadUrl = media.audioUrl
-      ? base + "/api/download-audio?url=" + encodeURIComponent(media.audioUrl)
-      : null;
+    const isYt = platform === "youtube";
+    let downloadUrl, audioDownloadUrl;
+    if (isYt && media.formats && media.formats.defVideoId) {
+      const F = media.formats;
+      const hasAV = F.defVideo && F.defVideo.hasAudio;
+      downloadUrl =
+        base +
+        "/api/download-yt?url=" +
+        encodeURIComponent(url) +
+        "&fmt=" +
+        encodeURIComponent(F.defVideoId) +
+        (F.defAudioId && !hasAV
+          ? "&aud=" + encodeURIComponent(F.defAudioId)
+          : "");
+      audioDownloadUrl = F.defAudioId
+        ? base +
+          "/api/download-audio-yt?url=" +
+          encodeURIComponent(url) +
+          "&fmt=" +
+          encodeURIComponent(F.defAudioId) +
+          "&abr=192"
+        : null;
+    } else {
+      downloadUrl = base + "/api/download?url=" + encodeURIComponent(media.video);
+      audioDownloadUrl = media.audioUrl
+        ? base + "/api/download-audio?url=" + encodeURIComponent(media.audioUrl)
+        : null;
+    }
     res.json({
       platform,
       title: PLATFORM_TITLES[platform] || "Media",
       mimeType: "video/mp4",
       thumbnail: media.thumb,
       sizeBytes,
-      downloadUrl: base + "/api/download?url=" + encodeURIComponent(media.video),
+      downloadUrl,
       audioUrl: media.audioUrl || null,
       audioDownloadUrl,
+      formats: media.formats || null,
+      watch: isYt ? url : null,
     });
   } catch (err) {
     if (err && err.code === "YTDLP_MISSING") {
@@ -545,9 +813,90 @@ app.get("/api/health", (req, res) => {
   res.json({ ok: true, service: "clipkosh" });
 });
 
+/** YouTube download via yt-dlp (robust vs. throttled direct URLs). */
+app.get("/api/download-yt", async (req, res) => {
+  const watch = req.query.url;
+  const fmt = req.query.fmt;
+  const aud = req.query.aud;
+  if (!watch || !fmt) return res.status(400).send("Missing url/fmt.");
+  const spec = aud && aud !== fmt ? fmt + "+" + aud : fmt;
+  const oTmp = tmpPath("ck-yt", ".mp4");
+  try {
+    const r = await downloadYtFormat(watch, spec, oTmp);
+    if (r.err || !fs.existsSync(oTmp)) {
+      return res
+        .status(502)
+        .send("Download failed: " + ((r.err && r.err.message) || "") + " " + r.stderr.slice(-400));
+    }
+    const st = await fsp.stat(oTmp);
+    res.setHeader("Content-Type", "video/mp4");
+    res.setHeader("Content-Disposition", 'attachment; filename="clipkosh.mp4"');
+    res.setHeader("Content-Length", String(st.size));
+    await streamFile(oTmp, res);
+  } finally {
+    await fsp.rm(oTmp, { force: true }).catch(() => {});
+  }
+});
+
+/** YouTube audio → MP3 via yt-dlp + ffmpeg transcode. */
+app.get("/api/download-audio-yt", async (req, res) => {
+  const watch = req.query.url;
+  const fmt = req.query.fmt;
+  const abr = Math.min(320, Math.max(32, parseInt(req.query.abr, 10) || 192));
+  if (!watch || !fmt) return res.status(400).send("Missing url/fmt.");
+  const aTmp = tmpPath("ck-ya", ".m4a");
+  const oTmp = tmpPath("ck-ymp3", ".mp3");
+  try {
+    const r = await downloadYtFormat(watch, fmt, aTmp);
+    if (r.err || !fs.existsSync(aTmp)) {
+      return res
+        .status(502)
+        .send("Audio extract failed: " + ((r.err && r.err.message) || "") + " " + r.stderr.slice(-400));
+    }
+    await new Promise((resolve, reject) => {
+      const ff = spawn(FFMPEG_BIN, [
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        aTmp,
+        "-vn",
+        "-b:a",
+        abr + "k",
+        oTmp,
+      ]);
+      let errOut = "";
+      ff.stderr.on("data", (d) => (errOut += d));
+      ff.on("error", reject);
+      ff.on("close", (code) =>
+        code === 0 ? resolve() : reject(new Error("ffmpeg (" + code + ") " + errOut))
+      );
+    });
+    const st = await fsp.stat(oTmp);
+    res.setHeader("Content-Type", "audio/mpeg");
+    res.setHeader("Content-Disposition", 'attachment; filename="clipkosh.mp3"');
+    res.setHeader("Content-Length", String(st.size));
+    await streamFile(oTmp, res);
+  } finally {
+    await Promise.all(
+      [aTmp, oTmp].map((p) => fsp.rm(p, { force: true }).catch(() => {}))
+    );
+  }
+});
+
 app.get("/api/download", async (req, res) => {
   const mediaUrl = req.query.url;
   if (!mediaUrl) return res.status(400).send("Missing url parameter.");
+
+  // DASH video-only → merge with the chosen audio stream via ffmpeg.
+  if (req.query.merge === "1" && req.query.audioUrl) {
+    try {
+      return await serveMerged(req, res, mediaUrl, req.query.audioUrl);
+    } catch (err) {
+      return res.status(502).send("Merge failed: " + (err.message || ""));
+    }
+  }
 
   try {
     const headers = {
@@ -605,71 +954,71 @@ app.get("/api/thumb", async (req, res) => {
   }
 });
 
-// Audio proxy: fetches the best audio stream and transcodes it to MP3 on the
-// fly with ffmpeg (y2mate-style audio download). Works from any device.
+// Audio download: fetches the requested audio stream to a temp file, transcodes
+// it to MP3 at the requested bitrate with ffmpeg, then streams the result.
+// Using a file-based pipeline (not a pipe) avoids premature-close/invalid
+// responses that the old streaming ffmpeg pipe produced on Render.
 app.get("/api/download-audio", async (req, res) => {
   const mediaUrl = req.query.url;
   if (!mediaUrl) return res.status(400).send("Missing url parameter.");
 
+  const abr = parseInt(req.query.abr, 10);
+  const kbps =
+    Number.isFinite(abr) && abr > 0 ? Math.min(Math.max(abr, 32), 320) : 192;
+
+  const srcTmp = tmpPath("ck-a-src", ".m4a");
+  const outTmp = tmpPath("ck-a-out", ".mp3");
   try {
-    const remote = await fetch(mediaUrl, {
-      headers: {
-        "User-Agent": USER_AGENT,
-        Referer: "https://www.youtube.com/",
-      },
+    await fetchToTemp(mediaUrl, srcTmp);
+    await new Promise((resolve, reject) => {
+      const ff = spawn(FFMPEG_BIN, [
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        srcTmp,
+        "-vn",
+        "-ac",
+        "2",
+        "-b:a",
+        kbps + "k",
+        "-f",
+        "mp3",
+        outTmp,
+      ]);
+      let errOut = "";
+      ff.stderr.on("data", (d) => (errOut += d));
+      ff.on("error", reject);
+      ff.on("close", (code) =>
+        code === 0
+          ? resolve()
+          : reject(new Error("ffmpeg audio failed (" + code + ") " + errOut))
+      );
     });
-    if (!remote.ok) return res.status(remote.status).send("Could not fetch audio stream.");
-
-    const ff = spawn("ffmpeg", [
-      "-hide_banner",
-      "-loglevel",
-      "error",
-      "-i",
-      "pipe:0",
-      "-vn",
-      "-ac",
-      "2",
-      "-b:a",
-      "192k",
-      "-f",
-      "mp3",
-      "pipe:1",
-    ]);
-
-    let headed = false;
-    ff.once("error", (err) => {
-      if (headed) return;
-      headed = true;
-      if (err && err.code === "ENOENT") {
-        res.status(501).send("ffmpeg is not installed on the server (audio conversion unavailable).");
-      } else {
-        try { res.destroy(); } catch (e) { /* ignore */ }
-      }
-    });
-
-    res.status(200);
+    const st = await fsp.stat(outTmp);
     res.setHeader("Content-Type", "audio/mpeg");
     res.setHeader("Content-Disposition", 'attachment; filename="clipkosh-audio.mp3"');
-    ff.stdout.pipe(res);
-
-    (async () => {
-      for await (const chunk of remote.body) {
-        ff.stdin.write(chunk);
-      }
-      ff.stdin.end();
-    })().catch(() => { try { ff.kill(); } catch (e) { /* ignore */ } });
-
-    remote.body.on("error", () => { try { ff.kill(); } catch (e) { /* ignore */ } });
-    ff.on("close", () => {
-      try { if (!res.writableEnded) res.end(); } catch (e) { /* ignore */ }
-    });
+    res.setHeader("Content-Length", String(st.size));
+    await streamFile(outTmp, res);
   } catch (err) {
-    res.status(500).send("Audio download failed: " + (err.message || ""));
+    if (err && err.code === "ENOENT") {
+      return res.status(501).send("ffmpeg is not installed on the server (audio conversion unavailable).");
+    }
+    if (!res.headersSent) {
+      res.status(502).send("Audio download failed: " + (err.message || ""));
+    }
+  } finally {
+    await Promise.all(
+      [srcTmp, outTmp].map((p) => fsp.rm(p, { force: true }).catch(() => {}))
+    );
   }
 });
 
-const server = app.listen(PORT, () => {
-  console.log("ClipKosh running → http://localhost:" + PORT);
+resolveFfmpeg().then(() => {
+  const server = app.listen(PORT, () => {
+    console.log("ClipKosh running → http://localhost:" + PORT + " (ffmpeg: " + FFMPEG_BIN + ")");
+  });
 });
 
 process.on("SIGINT", async () => {
