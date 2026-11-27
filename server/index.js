@@ -190,6 +190,7 @@ function parseFacebookVideo(html) {
 function resolveCookieFile() {
   const b64 = process.env.YOUTUBE_COOKIES_B64;
   if (b64) {
+    console.log("[yt] YOUTUBE_COOKIES_B64 length:", b64.length);
     try {
       const decoded = Buffer.from(b64, "base64").toString("utf8");
       const p = path.join(os.tmpdir(), "clipkosh-cookies-" + process.pid + ".txt");
@@ -233,10 +234,12 @@ const YT_AUDIO_FMT =
  * Run yt-dlp once with extra args (already includes --no-playlist/--no-warnings
  * /--skip-download). Returns { stdout, stderr }.
  */
-function runYtDlp(extraArgs, videoUrl) {
+function runYtDlp(extraArgs, videoUrl, opts) {
+  opts = opts || {};
+  const useCookies = opts.cookies !== false && YT_COOKIES_FILE;
   const args = ["--no-playlist", "--no-warnings", "--skip-download"];
   args.push(...extraArgs);
-  if (YT_COOKIES_FILE) args.push("--cookies", YT_COOKIES_FILE);
+  if (useCookies) args.push("--cookies", YT_COOKIES_FILE);
   args.push(videoUrl);
   return new Promise((resolve) => {
     execFile(
@@ -287,11 +290,11 @@ function resolveFfmpeg() {
 
 /** Fetch the full YouTube info JSON (one JS solve, faster than two runs). */
 async function getYtInfo(videoUrl) {
-  const attempts = YT_PO_TOKEN ? [0] : [0, 1, 2];
-  for (const idx of attempts) {
+  if (YT_PO_TOKEN) {
     const r = await runYtDlp(
-      ["--js-runtime", "node", ...ytAttemptArgs(idx), "--print-json"],
-      videoUrl
+      ["--js-runtime", "node", ...ytAttemptArgs(0), "--print-json"],
+      videoUrl,
+      { cookies: true }
     );
     if (classifyYtError(r.stderr).code !== "BOT") {
       if (r.err) return null;
@@ -301,8 +304,33 @@ async function getYtInfo(videoUrl) {
         return null;
       }
     }
-    // Transient bot-check — pause briefly before trying the next client.
-    await sleep(3500);
+    return null;
+  }
+  // Attempts: web+cookies → web w/o cookies → tv_embedded → android.
+  const attrs = [
+    { client: 0, cookies: true },
+    { client: 0, cookies: false },
+    { client: 1, cookies: false },
+    { client: 2, cookies: false },
+  ];
+  // No cookies configured → skip the redundant first attempt.
+  const attempts = YT_COOKIES_FILE ? attrs : attrs.slice(1);
+  for (const a of attempts) {
+    const r = await runYtDlp(
+      ["--js-runtime", "node", ...ytAttemptArgs(a.client), "--print-json"],
+      videoUrl,
+      { cookies: a.cookies }
+    );
+    if (classifyYtError(r.stderr).code !== "BOT") {
+      if (r.err) return null;
+      try {
+        return JSON.parse(r.stdout.trim());
+      } catch (e) {
+        return null;
+      }
+    }
+    // Transient bot-check — pause briefly before trying the next config.
+    await sleep(3000);
   }
   return null;
 }
@@ -448,6 +476,7 @@ function downloadYtFormat(videoUrl, fmtSpec, outPath) {
 
 /** yt-dlp download with PO-token support and retry on bot-check. */
 async function downloadYtFormatTry(videoUrl, fmtSpec, outPath, clientIdx) {
+  const useCookies = clientIdx === 0 && YT_COOKIES_FILE;
   const args = [
     "--no-playlist",
     "--no-warnings",
@@ -456,7 +485,7 @@ async function downloadYtFormatTry(videoUrl, fmtSpec, outPath, clientIdx) {
     "node",
     ...ytAttemptArgs(clientIdx),
   ];
-  if (YT_COOKIES_FILE) args.push("--cookies", YT_COOKIES_FILE);
+  if (useCookies) args.push("--cookies", YT_COOKIES_FILE);
   if (FFMPEG_BIN) args.push("--ffmpeg-location", FFMPEG_BIN);
   args.push("-f", fmtSpec, "-o", outPath);
   if (fmtSpec.includes("+")) args.push("--merge-output-format", "mp4");
