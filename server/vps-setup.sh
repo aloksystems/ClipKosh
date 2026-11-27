@@ -40,13 +40,25 @@ if ! command -v node >/dev/null || [ "$(node -v | cut -d. -f1 | tr -d v)" -lt 22
 fi
 node -v && npm -v
 
-# --- yt-dlp + anti-bot plugins --------------------------------------------
+# --- Python virtualenv for yt-dlp + anti-bot plugins -----------------------
+# Ubuntu/Debian 24.04+ block system-wide pip (PEP 668), so we use an isolated
+# venv. The server must point YTDLP_PATH at this venv's binary.
+echo "==> Creating Python virtualenv for yt-dlp"
+VENV="$HOME/.clipkosh-venv"
+if [ ! -x "$VENV/bin/python" ]; then
+  python3 -m venv "$VENV"
+fi
+"$VENV/bin/pip" install -q --upgrade pip
+
 echo "==> Installing yt-dlp + PO-token provider + EJS + curl_cffi"
-pip3 install -q -U \
+"$VENV/bin/pip" install -q \
   yt-dlp \
   "bgutil-ytdlp-pot-provider==2.0.2" \
   yt-dlp-ejs \
   curl_cffi
+
+echo "yt-dlp at: $VENV/bin/yt-dlp"
+"$VENV/bin/yt-dlp" --version
 
 # Build the bgutil PO-token provider (generation script) if not already built.
 POT_DIR="$HOME/bgutil-ytdlp-pot-provider"

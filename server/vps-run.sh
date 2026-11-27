@@ -9,6 +9,11 @@ PORT="${PORT:-3000}"
 
 cd "$SERVER_DIR"
 
+# Use the venv yt-dlp (installed by vps-setup.sh), if present.
+if [ -x "$HOME/.clipkosh-venv/bin/yt-dlp" ]; then
+  export YTDLP_PATH="$HOME/.clipkosh-venv/bin/yt-dlp"
+fi
+
 # Prefer the PO-token provider + impersonate for fewer bot-checks.
 export YT_BGUTIL_HOME="$HOME/bgutil-ytdlp-pot-provider/server"
 export YT_IMPERSONATE="${YT_IMPERSONATE:-chrome}"
