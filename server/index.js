@@ -183,6 +183,16 @@ function resolveCookieFile() {
 
 const YT_COOKIES_FILE = resolveCookieFile();
 
+// Prefer a combined (video+audio) direct-https MP4 so the download has sound and
+// is a real file (never an m3u8 HLS manifest, which SABR accounts hand out).
+const YT_VIDEO_FMT =
+  "best[ext=mp4][protocol^=https][height<=1080]" +
+  "/best[ext=mp4][protocol^=https]" +
+  "/mp4[height<=1080][protocol^=https]" +
+  "/best[ext=mp4]/mp4/best";
+const YT_AUDIO_FMT =
+  "bestaudio[ext=m4a][protocol^=https]/bestaudio[ext=m4a]/bestaudio";
+
 /**
  * Run yt-dlp to print a single direct stream URL.
  * Returns { url, stderr } — url is null when nothing usable was found.
@@ -197,6 +207,10 @@ function ytDlpUrl(videoUrl, format) {
       "%(url)s",
       "-f",
       format,
+      // YouTube's signature / n-challenge (and SABR-only accounts) require a JS
+      // runtime to solve. Node is always present (this is a Node server).
+      "--js-runtime",
+      "node",
     ];
     if (YT_COOKIES_FILE) args.push("--cookies", YT_COOKIES_FILE);
     args.push(videoUrl);
@@ -433,14 +447,14 @@ async function extractMedia(pageUrl, platform) {
       throw missing;
     }
 
-    let dl = await ytDlpUrl(pageUrl, "mp4[height<=1080]/best[ext=mp4]/mp4/best");
-    let audio = await ytDlpUrl(pageUrl, "bestaudio[ext=m4a]/bestaudio");
+    let dl = await ytDlpUrl(pageUrl, YT_VIDEO_FMT);
+    let audio = await ytDlpUrl(pageUrl, YT_AUDIO_FMT);
 
     // YouTube's bot-check is often transient — retry once after a short pause.
     if (!dl.url && classifyYtError(dl.stderr).code === "BOT") {
       await new Promise((r) => setTimeout(r, 4000));
-      dl = await ytDlpUrl(pageUrl, "mp4[height<=1080]/best[ext=mp4]/mp4/best");
-      audio = await ytDlpUrl(pageUrl, "bestaudio[ext=m4a]/bestaudio");
+      dl = await ytDlpUrl(pageUrl, YT_VIDEO_FMT);
+      audio = await ytDlpUrl(pageUrl, YT_AUDIO_FMT);
     }
 
     if (dl.url) {
