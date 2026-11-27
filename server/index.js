@@ -930,6 +930,16 @@ app.post("/api/resolve", async (req, res) => {
       });
     }
 
+    // TEMPORARY: only Instagram is enabled right now. YouTube and Facebook are
+    // paused because of anti-bot/provider issues (bots were returning BOT /
+    // UNAVAILABLE). Re-enable once those are resolved.
+    if (platform !== "instagram") {
+      return res.status(422).json({
+        error:
+          "Only Instagram reels work at the moment — YouTube & Facebook are temporarily paused. Try an Instagram link.",
+      });
+    }
+
     const media = await extractMedia(url, platform);
     if (!media || !media.video) {
       return res.status(422).json({
