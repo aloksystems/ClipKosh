@@ -19,10 +19,13 @@ sleep 3
 curl -s http://localhost:3000/ -o /dev/null -w "Home HTTP %{http_code}\n"
 
 echo ""
-echo "==> 3. YouTube resolve test (BaW_jenozKc)..."
-curl -s -X POST http://localhost:3000/api/resolve \
-  -H "Content-Type: application/json" \
-  --data '{"url":"https://www.youtube.com/watch?v=BaW_jenozKc"}' \
-  | head -c 1000
-echo ""
+echo "==> 3. YouTube resolve tests..."
+for V in jNQXAC9IVRw dQw4w9WgXcQ BaW_jenozKc; do
+  echo "--- video $V ---"
+  curl -s -X POST http://localhost:3000/api/resolve \
+    -H "Content-Type: application/json" \
+    --data "{\"url\":\"https://www.youtube.com/watch?v=$V\"}" \
+    | head -c 600
+  echo ""
+done
 echo "==> Done."
