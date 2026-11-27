@@ -143,52 +143,68 @@ function parseFacebookVideo(html) {
   return parseStatic(html);
 }
 
-/** Resolve a direct YouTube stream URL via yt-dlp (best mp4 ≤1080p). */
-function ytDlpUrl(videoUrl) {
+/**
+ * Optional cookie file (e.g. from "Get cookies.txt LOCALLY" extension) for
+ * resolving age-restricted / sign-in YouTube videos. Path can be a local file
+ * or a URL (yt-dlp supports both).
+ */
+const YT_COOKIES = process.env.YOUTUBE_COOKIES || process.env.COOKIES_FILE || null;
+
+/**
+ * Run yt-dlp to print a single direct stream URL.
+ * Returns { url, stderr } — url is null when nothing usable was found.
+ */
+function ytDlpUrl(videoUrl, format) {
   return new Promise((resolve) => {
+    const args = [
+      "--no-playlist",
+      "--no-warnings",
+      "--skip-download",
+      "--print",
+      "%(url)s",
+      "-f",
+      format,
+    ];
+    if (YT_COOKIES) args.push("--cookies", YT_COOKIES);
+    args.push(videoUrl);
+
     execFile(
       YTDLP,
-      [
-        "--no-warnings",
-        "--skip-download",
-        "--print",
-        "%(url)s",
-        "-f",
-        "mp4[height<=1080]/best[ext=mp4]",
-        videoUrl,
-      ],
-      { timeout: 90000, maxBuffer: 2 * 1024 * 1024 },
+      args,
+      { timeout: 90000, maxBuffer: 4 * 1024 * 1024 },
       (err, stdout, stderr) => {
-        if (err) return resolve(null);
         const line = String(stdout || "").trim().split("\n")[0];
-        resolve(/^https?:\/\//.test(line) ? line : null);
+        resolve({
+          url: /^https?:\/\//.test(line) ? line : null,
+          stderr: String(stderr || ""),
+        });
       }
     );
   });
 }
 
-/** Resolve the best audio stream URL (m4a preferred) via yt-dlp. */
-function ytDlpAudioUrl(videoUrl) {
-  return new Promise((resolve) => {
-    execFile(
-      YTDLP,
-      [
-        "--no-warnings",
-        "--skip-download",
-        "--print",
-        "%(url)s",
-        "-f",
-        "bestaudio[ext=m4a]/bestaudio",
-        videoUrl,
-      ],
-      { timeout: 90000, maxBuffer: 2 * 1024 * 1024 },
-      (err, stdout) => {
-        if (err) return resolve(null);
-        const line = String(stdout || "").trim().split("\n")[0];
-        resolve(/^https?:\/\//.test(line) ? line : null);
-      }
-    );
-  });
+/** Map yt-dlp stderr hints to a friendly, specific user message. */
+function classifyYtError(stderr) {
+  const s = stderr.toLowerCase();
+  if (/sign in to confirm|confirm you'?re not a bot|captcha|bot check|automated request/i.test(s)) {
+    return { code: "BOT", message: "YouTube flagged this request as automated (bot check). Please try again in a few minutes." };
+  }
+  if (/age-restricted|age restriction|signed out.*age|18\+ video/i.test(s)) {
+    return { code: "AGE", message: "This video is age-restricted and needs sign-in cookies to resolve." };
+  }
+  if (/not available in your country|blocked.*country|playback.*country|geo-restricted|regional restriction/i.test(s)) {
+    return { code: "REGION", message: "This video is not available in your region." };
+  }
+  if (/private video/i.test(s)) {
+    return { code: "PRIVATE", message: "This video is private and can't be downloaded without access." };
+  }
+  if (/video unavailable|unavailable|has been removed|taken down/i.test(s)) {
+    return { code: "UNAVAILABLE", message: "This video is unavailable or has been removed." };
+  }
+  return {
+    code: "UNKNOWN",
+    message: "Couldn't extract this YouTube video (it may be private, age/region-restricted, or unavailable).",
+  };
 }
 
 /** Best-effort content length via a HEAD request. */
@@ -385,22 +401,23 @@ async function extractMedia(pageUrl, platform) {
     }
 
     const [dl, audio] = await Promise.all([
-      ytDlpUrl(pageUrl),
-      ytDlpAudioUrl(pageUrl),
+      ytDlpUrl(pageUrl, "mp4[height<=1080]/best[ext=mp4]/mp4/best"),
+      ytDlpUrl(pageUrl, "bestaudio[ext=m4a]/bestaudio"),
     ]);
-    if (dl) {
+    if (dl.url) {
       return {
-        video: dl,
+        video: dl.url,
         thumb: "https://i.ytimg.com/vi/" + id + "/hqdefault.jpg",
-        audioUrl: audio || null,
+        audioUrl: audio.url || null,
       };
     }
 
-    // Tool exists but produced nothing — the video itself is unavailable.
-    const blocked = new Error(
-      "Couldn't extract this YouTube video (it may be private, age/region-restricted, or unavailable)."
-    );
+    // Tool exists but produced nothing — figure out *why* so the user gets a
+    // clear, specific message instead of a generic one.
+    const reason = classifyYtError(dl.stderr);
+    const blocked = new Error(reason.message);
     blocked.code = "YT_RESOLVE_FAILED";
+    blocked.detail = reason.code;
     throw blocked;
   }
   return null;
@@ -463,7 +480,7 @@ app.post("/api/resolve", async (req, res) => {
       return res.status(501).json({ error: err.message });
     }
     if (err && err.code === "YT_RESOLVE_FAILED") {
-      return res.status(422).json({ error: err.message });
+      return res.status(422).json({ error: err.message, detail: err.detail || null });
     }
     res.status(500).json({ error: err.message || "Server error." });
   }

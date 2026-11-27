@@ -24,6 +24,6 @@ CHROME_BIN=$(find "$CACHE_DIR" -type f -name chrome -path "*chrome-linux64*" | h
 echo "chrome bin: $CHROME_BIN"
 ldd "$CHROME_BIN" 2>/dev/null | grep -i "not found" || echo "ALL_CHROME_LIBS_PRESENT"
 
-echo "==> yt-dlp (YouTube)"
-pip3 install -q yt-dlp
+echo "==> yt-dlp (YouTube) — force latest (YouTube changes often)"
+pip3 install -q -U yt-dlp
 yt-dlp --version

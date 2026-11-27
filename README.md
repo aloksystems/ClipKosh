@@ -41,6 +41,13 @@ Then open **http://localhost:3000**.
 > **For YouTube support**, also install `yt-dlp` and make sure it's on the PATH:
 > `pip install yt-dlp` (or drop `yt-dlp.exe` somewhere on PATH on Windows).
 > Instagram and Facebook work without it.
+>
+> **Age-restricted / private YouTube videos:** set the `YOUTUBE_COOKIES` env
+> variable to a cookies file path (e.g. exported via the "Get cookies.txt
+> LOCALLY" browser extension) so `yt-dlp` can pass sign-in/age verification.
+> Example: `set YOUTUBE_COOKIES=C:\path\to\cookies.txt` (or add it to the
+> service's environment variables in Render). Without it, these videos return a
+> clear "age-restricted / requires sign-in" message instead of silently failing.
 
 There is also a tiny **`GET /api/health`** endpoint (returns `{"ok":true}`). The frontend pings it on load and shows a small status badge in the footer — **API online / API offline** — so you can instantly tell whether the page you're viewing is talking to Express or to a static file server.
 
