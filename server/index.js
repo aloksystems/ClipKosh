@@ -36,6 +36,39 @@ const USER_AGENT =
 const YTDLP = process.env.YTDLP_PATH || "yt-dlp";
 let FFMPEG_BIN = process.env.FFMPEG_PATH || null;
 
+/*
+ * YouTube anti-bot handling.
+ *  - PO/POT token: modern youtube web/tv clients often demand a PO token. Provide
+ *    one as "visitor_data:po_token" in YOUTUBE_PO_TOKEN (or base64 in
+ *    YOUTUBE_PO_TOKEN_B64). When set, we pin player_client=web and inject the token.
+ *  - Otherwise, on a bot-check we retry with less bot-strict player clients in
+ *    turn: default → tv_embedded → android.
+ */
+let YT_PO_TOKEN = null;
+{
+  const raw = process.env.YOUTUBE_PO_TOKEN;
+  if (raw && raw.includes(":")) YT_PO_TOKEN = raw.trim();
+  else if (process.env.YOUTUBE_PO_TOKEN_B64) {
+    try {
+      const s = Buffer.from(process.env.YOUTUBE_PO_TOKEN_B64, "base64").toString("utf8");
+      if (s.includes(":")) YT_PO_TOKEN = s.trim();
+    } catch (_) { /* ignore malformed base64 */ }
+  }
+}
+const YT_CLIENTS = ["", "tv_embedded", "android"];
+function ytAttemptArgs(clientIdx) {
+  if (YT_PO_TOKEN) {
+    return ["--extractor-args", "youtube:po_token=" + YT_PO_TOKEN];
+  }
+  const client = YT_CLIENTS[clientIdx] || "";
+  return client
+    ? ["--extractor-args", "youtube:player_client=" + client]
+    : [];
+}
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
 // Puppeteer must find the Chrome installed during build. Render's build
 // installs Chrome into the in-app cache (via render-build.sh) so it survives
 // into the runtime image; keep runtime pointed at that same place.
@@ -254,18 +287,24 @@ function resolveFfmpeg() {
 
 /** Fetch the full YouTube info JSON (one JS solve, faster than two runs). */
 async function getYtInfo(videoUrl) {
-  let r = await runYtDlp(["--js-runtime", "node", "--print-json"], videoUrl);
-  // YouTube's bot-check is often transient — retry once after a short pause.
-  if (classifyYtError(r.stderr).code === "BOT") {
-    await new Promise((res) => setTimeout(res, 4000));
-    r = await runYtDlp(["--js-runtime", "node", "--print-json"], videoUrl);
+  const attempts = YT_PO_TOKEN ? [0] : [0, 1, 2];
+  for (const idx of attempts) {
+    const r = await runYtDlp(
+      ["--js-runtime", "node", ...ytAttemptArgs(idx), "--print-json"],
+      videoUrl
+    );
+    if (classifyYtError(r.stderr).code !== "BOT") {
+      if (r.err) return null;
+      try {
+        return JSON.parse(r.stdout.trim());
+      } catch (e) {
+        return null;
+      }
+    }
+    // Transient bot-check — pause briefly before trying the next client.
+    await sleep(3500);
   }
-  if (r.err) return null;
-  try {
-    return JSON.parse(r.stdout.trim());
-  } catch (e) {
-    return null;
-  }
+  return null;
 }
 
 /** Only direct media URLs (never m3u8 HLS manifests) are downloadable. */
@@ -404,13 +443,26 @@ async function streamFile(filePath, res) {
  * which raw fetches of googlevideo URLs do not (they hang/timed out).
  */
 function downloadYtFormat(videoUrl, fmtSpec, outPath) {
-  const args = ["--no-playlist", "--no-warnings", "--newline", "--js-runtime", "node"];
+  return downloadYtFormatTry(videoUrl, fmtSpec, outPath, 0);
+}
+
+/** yt-dlp download with PO-token support and retry on bot-check. */
+async function downloadYtFormatTry(videoUrl, fmtSpec, outPath, clientIdx) {
+  const args = [
+    "--no-playlist",
+    "--no-warnings",
+    "--newline",
+    "--js-runtime",
+    "node",
+    ...ytAttemptArgs(clientIdx),
+  ];
   if (YT_COOKIES_FILE) args.push("--cookies", YT_COOKIES_FILE);
   if (FFMPEG_BIN) args.push("--ffmpeg-location", FFMPEG_BIN);
   args.push("-f", fmtSpec, "-o", outPath);
   if (fmtSpec.includes("+")) args.push("--merge-output-format", "mp4");
   args.push(videoUrl);
-  return new Promise((resolve) => {
+
+  const r = await new Promise((resolve) => {
     execFile(
       YTDLP,
       args,
@@ -424,6 +476,18 @@ function downloadYtFormat(videoUrl, fmtSpec, outPath) {
       }
     );
   });
+
+  if (!r.err) return r;
+  const reason = classifyYtError(r.stderr).code;
+  if (
+    (reason === "BOT" || reason === "AGE") &&
+    !YT_PO_TOKEN &&
+    clientIdx < YT_CLIENTS.length - 1
+  ) {
+    await sleep(3500);
+    return downloadYtFormatTry(videoUrl, fmtSpec, outPath, clientIdx + 1);
+  }
+  return r;
 }
 
 /** Merge two direct streams (DASH video-only + audio) into one MP4. */
