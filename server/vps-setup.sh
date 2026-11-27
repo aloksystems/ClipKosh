@@ -81,6 +81,8 @@ echo "==> Installing Puppeteer Chrome"
 CACHE_DIR="$APP_DIR/.cache/puppeteer"
 mkdir -p "$CACHE_DIR"
 export PUPPETEER_CACHE_DIR="$CACHE_DIR"
+# Clear any incomplete/partial Chrome build so install always starts fresh.
+npx puppeteer browsers clear >/dev/null 2>&1 || true
 npx puppeteer browsers install chrome
 
 echo ""
